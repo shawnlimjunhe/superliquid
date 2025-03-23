@@ -6,3 +6,4 @@ pub struct Transaction {
     pub to: String,
     pub amount: u64,
 }
+

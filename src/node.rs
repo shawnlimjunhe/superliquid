@@ -1,9 +1,16 @@
 use tokio::net::{TcpListener, TcpStream};
+use std::io::{Result, Error, ErrorKind};
 
-use crate::{network::receive_message, types::Transaction};
-use crate::network;
+use crate::{network, types::Transaction};
+use crate::message_protocol;
 
-pub async fn run_node(addr: &str) -> std::io::Result<()> {
+struct Node {
+  is_leader: bool,
+  transactions: Vec<Transaction>,
+  peers: Vec<Node>,
+}
+
+pub async fn run_node(addr: &str) -> Result<()> {
   // Bind the listener to the address
   let listener = TcpListener::bind(addr).await?;
 
@@ -19,22 +26,9 @@ pub async fn run_node(addr: &str) -> std::io::Result<()> {
   }
 }
 
-async fn process(mut socket: TcpStream) -> std::io::Result<()>{
-
-  let resp_buff = receive_message(&mut socket).await?;
-
-  match serde_json::from_slice::<Transaction>(&resp_buff) {
-    Ok(tx) => {
-      println!("Recieved transaction: {:?}", tx);
-      let resp = b"ok";
-      network::send_message(&mut socket, resp).await?;
-    }
-    Err(e) => {
-      println!("Failed to parse json: {:?}", e);
-      let resp = b"error";
-      network::send_message(&mut socket, resp).await?;
-    }
-  };
-  
+async fn process(mut socket: TcpStream) -> std::io::Result<()> {
+  let transaction = message_protocol::listen_for_transaction(&mut socket).await?;
+  println!("Received Transaction: {:?}", transaction);
   Ok(())
 }
+

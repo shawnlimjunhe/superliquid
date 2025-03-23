@@ -2,6 +2,7 @@ mod types;
 mod node;
 mod client;
 mod network;
+mod message_protocol;
 
 use std::env;
 
