@@ -1,7 +1,7 @@
 use tokio::net::{TcpListener, TcpStream};
-use std::io::{Result, Error, ErrorKind};
+use std::io::Result;
 
-use crate::{network, types::Transaction};
+use crate::types::Transaction;
 use crate::message_protocol;
 
 struct Node {
