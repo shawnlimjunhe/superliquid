@@ -33,33 +33,42 @@ pub async fn run_node(addr: &str) -> Result<()> {
     }
 }
 
-async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> std::io::Result<()> {
+async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Result<()> {
     loop {
         let message = message_protocol::receive_message(&mut socket).await?;
 
         match message {
             Message::Transaction(tx) => {
-                println!("Received Transaction: {:?}", tx);
-                {
-                    let mut node: std::sync::MutexGuard<'_, Node> = node
-                        .lock()
-                        .expect("Lock failed");
-                    node.transactions.push(tx);
-                }
-                message_protocol::send_ack(&mut socket).await?;
+                handle_transaction(&mut socket, &node, tx).await?;
             }
-
             Message::Query => {
-                println!("Received a query");
-                let txs = {
-                    let node = node.lock().expect("Lock failed");
-                    node.transactions.clone()
-                };
-                message_protocol::send_message(&mut socket, &Message::Response(txs)).await?;
+                handle_query(&mut socket, &node).await?;
             }
             _ => {}
         }
     }
 
     Ok(())
+}
+
+async fn handle_transaction(
+    mut socket: &mut TcpStream,
+    node: &Arc<Mutex<Node>>,
+    tx: Transaction
+) -> Result<()> {
+    println!("Received Transaction: {:?}", tx);
+    {
+        let mut node: std::sync::MutexGuard<'_, Node> = node.lock().expect("Lock failed");
+        node.transactions.push(tx);
+    }
+    message_protocol::send_ack(&mut socket).await
+}
+
+async fn handle_query(mut socket: &mut TcpStream, node: &Arc<Mutex<Node>>) -> Result<()> {
+    println!("Received a query");
+    let txs = {
+        let node = node.lock().expect("Lock failed");
+        node.transactions.clone()
+    };
+    message_protocol::send_message(&mut socket, &Message::Response(txs)).await
 }
