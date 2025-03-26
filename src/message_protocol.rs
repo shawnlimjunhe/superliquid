@@ -13,11 +13,11 @@ pub enum Message {
     Ack,
 }
 
-pub async fn recieve_message(stream: &mut TcpStream) -> Result<Message> {
+pub async fn receive_message(stream: &mut TcpStream) -> Result<Message> {
     network::receive_json::<Message>(stream).await
 }
 
-async fn send_message(stream: &mut TcpStream, message: &Message) -> Result<()> {
+pub async fn send_message(stream: &mut TcpStream, message: &Message) -> Result<()> {
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
     Ok(())
@@ -45,20 +45,6 @@ pub async fn send_query(stream: &mut TcpStream) -> Result<Vec<Transaction>> {
     }
 }
 
-pub async fn listen_for_transaction(stream: &mut TcpStream) -> Result<Transaction> {
-    let message = recieve_message(stream).await?;
-
-    match message {
-        Message::Transaction(tx) => {
-            send_message(stream, &Message::Ack).await?;
-            Ok(tx)
-        }
-        other =>
-            Err(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Expected Query, got {:?}", other)
-                )
-            ),
-    }
+pub async fn send_ack(stream: &mut TcpStream) -> Result<()> {
+    send_message(stream, &Message::Ack).await
 }
