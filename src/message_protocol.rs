@@ -11,6 +11,7 @@ pub enum Message {
     Transaction(Transaction),
     Response(Vec<Transaction>),
     Ack,
+    End, // Terminate connection
 }
 
 pub async fn receive_message(stream: &mut TcpStream) -> Result<Message> {
@@ -43,6 +44,11 @@ pub async fn send_query(stream: &mut TcpStream) -> Result<Vec<Transaction>> {
         other =>
             Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
     }
+}
+
+pub async fn send_end(stream: &mut TcpStream) -> Result<()> {
+    let msg = Message::End;
+    send_message(stream, &msg).await
 }
 
 pub async fn send_ack(stream: &mut TcpStream) -> Result<()> {

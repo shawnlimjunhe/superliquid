@@ -18,5 +18,9 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     println!("Recieved Transactions: {:?}", txs);
 
+    println!("Ending connection.");
+
+    message_protocol::send_end(&mut stream).await?;
+
     Ok(())
 }

@@ -44,6 +44,9 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Res
             Message::Query => {
                 handle_query(&mut socket, &node).await?;
             }
+            Message::End => {
+                break;
+            }
             _ => {}
         }
     }
