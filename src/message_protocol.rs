@@ -34,6 +34,17 @@ pub async fn send_transaction(stream: &mut TcpStream, tx: Transaction) -> Result
     }
 }
 
+pub async fn send_query(stream: &mut TcpStream) -> Result<Vec<Transaction>> {
+    let msg = Message::Query;
+    send_message(stream, &msg).await?;
+
+    match network::receive_json::<Message>(stream).await? {
+        Message::Response(txs) => Ok(txs), // basic ACK
+        other =>
+            Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
+    }
+}
+
 pub async fn listen_for_transaction(stream: &mut TcpStream) -> Result<Transaction> {
     let message = recieve_message(stream).await?;
 

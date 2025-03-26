@@ -14,5 +14,9 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     message_protocol::send_transaction(&mut stream, tx).await?;
 
+    let txs = message_protocol::send_query(&mut stream).await?;
+
+    println!("Recieved Transactions: {:?}", txs);
+
     Ok(())
 }
