@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use tokio::{ io::{ AsyncReadExt, AsyncWriteExt, AsyncWrite, AsyncRead }, net::TcpStream };
+use tokio::io::{ AsyncReadExt, AsyncWriteExt, AsyncWrite, AsyncRead };
 
 use serde_json;
 
@@ -146,7 +146,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_json_success() -> std::io::Result<()> {
-        use tokio::io::duplex;
         use serde::{ Deserialize, Serialize };
 
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -174,8 +173,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_json_invalid_format() -> std::io::Result<()> {
-        use tokio::io::duplex;
-
         let (mut client_end, mut server_end) = duplex(1024);
 
         let garbage_data = b"definitely not json";
@@ -192,8 +189,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_json_truncated_payload() -> std::io::Result<()> {
-        use tokio::io::duplex;
-
         let full_json = br#"{"key": "value"}"#;
         let truncated_json = &full_json[..5]; // Cut off mid-string
 
@@ -218,7 +213,7 @@ mod tests {
 
         #[derive(Debug, Deserialize)]
         struct ExpectedStruct {
-            id: u32,
+            _id: u32, // we are not using this id
         }
 
         let wrong_json = serde_json::json!({ "unexpected_key": "oops" });
