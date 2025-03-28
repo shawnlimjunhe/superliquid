@@ -1,5 +1,5 @@
-use tokio::net::{ TcpListener, TcpStream };
-use std::collections::HashSet;
+use tokio::{ net::{ TcpListener, TcpStream }, sync };
+use std::collections::{ HashMap, HashSet };
 use std::io::Result;
 use std::sync::{ Arc, Mutex };
 
@@ -11,16 +11,8 @@ struct Node {
     _is_leader: bool,
     transactions: Vec<Transaction>,
     seen_transactions: HashSet<[u8; 32]>,
-    peers: Vec<Node>, // For now, we skip peer discovery
-}
-
-impl Node {
-    pub fn get_peer_addresses(&self) -> Vec<String> {
-        self.peers
-            .iter()
-            .map(|node| node.addr.clone())
-            .collect()
-    }
+    peers: Vec<String>,
+    peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
 }
 
 pub async fn run_node(addr: &str) -> Result<()> {
@@ -33,6 +25,7 @@ pub async fn run_node(addr: &str) -> Result<()> {
             transactions: vec![],
             seen_transactions: HashSet::new(),
             peers: vec![],
+            peer_connections: HashMap::new(),
         })
     );
 
@@ -85,15 +78,15 @@ async fn handle_transaction(
     }
     message_protocol::send_ack(&mut socket).await?;
 
-    let peer_addresses = {
+    let peer_connections: Vec<Arc<sync::Mutex<TcpStream>>> = {
         let node = node.lock().expect("Lock failed");
-        node.get_peer_addresses()
+        node.peer_connections.values().cloned().collect()
     };
 
-    for addr in peer_addresses.into_iter() {
+    for stream in peer_connections {
         let cloned_tx = tx.clone();
         tokio::spawn(async move {
-            let mut stream = TcpStream::connect(addr).await?;
+            let mut stream = stream.lock().await;
             send_transaction(&mut stream, cloned_tx).await
         });
     }
