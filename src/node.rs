@@ -8,7 +8,7 @@ use crate::message_protocol::{ self, send_transaction, Message };
 
 struct Node {
     addr: String,
-    is_leader: bool,
+    _is_leader: bool,
     transactions: Vec<Transaction>,
     seen_transactions: HashSet<[u8; 32]>,
     peers: Vec<Node>, // For now, we skip peer discovery
@@ -29,7 +29,7 @@ pub async fn run_node(addr: &str) -> Result<()> {
     let node = Arc::new(
         Mutex::new(Node {
             addr: addr.to_owned(),
-            is_leader: true,
+            _is_leader: true,
             transactions: vec![],
             seen_transactions: HashSet::new(),
             peers: vec![],
