@@ -15,17 +15,18 @@ struct Node {
     peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
 }
 
-pub async fn run_node(addr: &str) -> Result<()> {
+pub async fn run_node(addr: &str, peers: Vec<String>) -> Result<()> {
     // Bind the listener to the address
     let listener = TcpListener::bind(addr).await?;
+    let peer_connections = connect_to_peers(&peers).await?;
     let node = Arc::new(
         Mutex::new(Node {
             addr: addr.to_owned(),
             _is_leader: true,
             transactions: vec![],
             seen_transactions: HashSet::new(),
-            peers: vec![],
-            peer_connections: HashMap::new(),
+            peers: peers,
+            peer_connections: peer_connections,
         })
     );
 
@@ -61,6 +62,25 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Res
     }
 
     Ok(())
+}
+
+async fn connect_to_peers(
+    peers: &Vec<String>
+) -> Result<HashMap<String, Arc<sync::Mutex<TcpStream>>>> {
+    let mut peer_connections = HashMap::new();
+
+    for peer_addr in peers.iter() {
+        match TcpStream::connect(peer_addr).await {
+            Ok(stream) => {
+                peer_connections.insert(peer_addr.clone(), Arc::new(sync::Mutex::new(stream)));
+                println!("Connected to peer at {}", peer_addr);
+            }
+            Err(e) => {
+                eprintln!("Failed to connect to {}: {:?}", peer_addr, e);
+            }
+        }
+    }
+    Ok(peer_connections)
 }
 
 async fn handle_transaction(

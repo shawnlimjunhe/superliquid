@@ -1,33 +1,40 @@
 use superliquid::*;
 
-use std::{ env, io::Error };
+use std::env;
 
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect();
-    let ip = "127.0.0.1:";
-    let ports = ["6379", "6479", "6579", "6679"];
+    let ip = "127.0.0.1";
+    let base_port = 6400;
+    let num_nodes = 4;
+
     let node_index = args
-        .get(1)
+        .get(2)
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
 
-    if node_index >= ports.len() {
-        Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Invalid node index. Must be -1–{}.", ports.len() - 1)
-        );
+    if node_index >= num_nodes {
+        panic!("Invalid node index. Must be 0 to {}", num_nodes - 1);
     }
 
-    let addr = format!("{}{}", ip, ports[node_index]);
+    let ports: Vec<u16> = (0..num_nodes).map(|i| base_port + (i as u16)).collect();
+    let curr_port = ports[node_index];
+    let addr = format!("{}:{}", ip, curr_port);
+
+    let peers = ports
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != node_index)
+        .map(|(_, port)| format!("{}:{}", ip, port))
+        .collect();
+
+    println!("{}", addr);
     let _ = match args.get(1).map(|s| s.as_str()) {
-        Some("node") => { node::run_node(&addr).await }
-        Some("client") => {
-            let addr = format!("{}{}", ip, ports[0]); // Connect to node 0
-            client::run_client(&addr).await
-        }
+        Some("node") => { node::run_node(&addr, peers).await }
+        Some("client") => { client::run_client(&addr).await }
         _ => {
-            eprintln!("Usage: cargo run -- [node|client]");
+            eprintln!("Usage: cargo run -- [node|client] [number]");
             Ok(())
         }
     };
