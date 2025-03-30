@@ -19,6 +19,7 @@ pub struct HotStuffReplica {
     view_number: ViewNumber,
     locked_qc: Option<QuorumCertificate>,
     prepare_qc: Option<QuorumCertificate>,
+    current_proposal: Option<Block>,
 }
 
 impl HotStuffReplica {
@@ -31,6 +32,7 @@ impl HotStuffReplica {
             view_number: 0,
             locked_qc: None,
             prepare_qc: None,
+            current_proposal: None,
         }
     }
 

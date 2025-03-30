@@ -21,7 +21,7 @@ pub struct Block {
     parent_id: BlockHash,
     cmd: Command,
     view_number: BlockViewNum,
-    justify: Option<Box<QuorumCertificate>>,
+    justify: Option<QuorumCertificate>,
 }
 
 #[derive(Serialize, Deserialize)]
