@@ -6,53 +6,53 @@ use crate::types::Transaction;
 use crate::network;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum Message {
+pub enum AppMessage {
     Query,
-    Transaction(Transaction),
+    SubmitTransaction(Transaction),
     Response(Vec<Transaction>),
     Ack,
     End, // Terminate connection
 }
 
-pub async fn receive_message(stream: &mut TcpStream) -> Result<Message> {
-    network::receive_json::<Message, TcpStream>(stream).await
+pub async fn receive_message(stream: &mut TcpStream) -> Result<AppMessage> {
+    network::receive_json::<AppMessage, TcpStream>(stream).await
 }
 
-pub async fn send_message(stream: &mut TcpStream, message: &Message) -> Result<()> {
+pub async fn send_message(stream: &mut TcpStream, message: &AppMessage) -> Result<()> {
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
     Ok(())
 }
 
 pub async fn send_transaction(stream: &mut TcpStream, tx: Transaction) -> Result<()> {
-    let msg = Message::Transaction(tx);
+    let msg = AppMessage::SubmitTransaction(tx);
     send_message(stream, &msg).await?;
 
-    match network::receive_json::<Message, TcpStream>(stream).await? {
-        Message::Ack => Ok(()), // basic ACK
+    match network::receive_json::<AppMessage, TcpStream>(stream).await? {
+        AppMessage::Ack => Ok(()), // basic ACK
         other =>
             Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
     }
 }
 
 pub async fn send_query(stream: &mut TcpStream) -> Result<Vec<Transaction>> {
-    let msg = Message::Query;
+    let msg = AppMessage::Query;
     send_message(stream, &msg).await?;
 
-    match network::receive_json::<Message, TcpStream>(stream).await? {
-        Message::Response(txs) => Ok(txs), // basic ACK
+    match network::receive_json::<AppMessage, TcpStream>(stream).await? {
+        AppMessage::Response(txs) => Ok(txs), // basic ACK
         other =>
             Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
     }
 }
 
 pub async fn send_end(stream: &mut TcpStream) -> Result<()> {
-    let msg = Message::End;
+    let msg = AppMessage::End;
     send_message(stream, &msg).await
 }
 
 pub async fn send_ack(stream: &mut TcpStream) -> Result<()> {
-    send_message(stream, &Message::Ack).await
+    send_message(stream, &AppMessage::Ack).await
 }
 
 #[cfg(test)]
@@ -77,7 +77,7 @@ mod tests {
             let (mut socket, _) = listener.accept().await.unwrap();
             let msg = receive_message(&mut socket).await.unwrap();
             match msg {
-                Message::Transaction(tx) => {
+                AppMessage::SubmitTransaction(tx) => {
                     assert_eq!(tx.amount, 42);
                     send_ack(&mut socket).await.unwrap();
                 }
@@ -99,9 +99,9 @@ mod tests {
             let (mut socket, _) = listener.accept().await.unwrap();
             let msg = receive_message(&mut socket).await.unwrap();
             match msg {
-                Message::Query => {
+                AppMessage::Query => {
                     let txs = vec![make_transaction()];
-                    send_message(&mut socket, &Message::Response(txs)).await.unwrap();
+                    send_message(&mut socket, &AppMessage::Response(txs)).await.unwrap();
                 }
                 _ => panic!("Expected Query"),
             }

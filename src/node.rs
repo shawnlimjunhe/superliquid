@@ -1,13 +1,14 @@
 use tokio::{ net::{ TcpListener, TcpStream }, sync };
+
 use std::collections::{ HashMap, HashSet };
 use std::io::Result;
 use std::sync::{ Arc, Mutex };
 
 use crate::types::Transaction;
-use crate::message_protocol::{ self, send_transaction, Message };
+use crate::message_protocol::{ self, send_transaction, AppMessage };
 
 struct Node {
-    addr: String,
+    id: String,
     _is_leader: bool,
     transactions: Vec<Transaction>,
     seen_transactions: HashSet<[u8; 32]>,
@@ -15,13 +16,13 @@ struct Node {
     peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
 }
 
-pub async fn run_node(addr: &str, peers: Vec<String>) -> Result<()> {
+pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Result<()> {
     // Bind the listener to the address
     let listener = TcpListener::bind(addr).await?;
     let peer_connections = connect_to_peers(&peers).await?;
     let node = Arc::new(
         Mutex::new(Node {
-            addr: addr.to_owned(),
+            id: format!("node-{}", node_index),
             _is_leader: true,
             transactions: vec![],
             seen_transactions: HashSet::new(),
@@ -48,13 +49,13 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Res
         let message = message_protocol::receive_message(&mut socket).await?;
 
         match message {
-            Message::Transaction(tx) => {
+            AppMessage::SubmitTransaction(tx) => {
                 handle_transaction(&mut socket, &node, tx).await?;
             }
-            Message::Query => {
+            AppMessage::Query => {
                 handle_query(&mut socket, &node).await?;
             }
-            Message::End => {
+            AppMessage::End => {
                 break;
             }
             _ => {}
@@ -120,5 +121,5 @@ async fn handle_query(mut socket: &mut TcpStream, node: &Arc<Mutex<Node>>) -> Re
         let node = node.lock().expect("Lock failed");
         node.transactions.clone()
     };
-    message_protocol::send_message(&mut socket, &Message::Response(txs)).await
+    message_protocol::send_message(&mut socket, &AppMessage::Response(txs)).await
 }

@@ -31,7 +31,7 @@ async fn main() {
 
     println!("{}", addr);
     let _ = match args.get(1).map(|s| s.as_str()) {
-        Some("node") => { node::run_node(&addr, peers).await }
+        Some("node") => { node::run_node(&addr, peers, node_index).await }
         Some("client") => { client::run_client(&addr).await }
         _ => {
             eprintln!("Usage: cargo run -- [node|client] [number]");

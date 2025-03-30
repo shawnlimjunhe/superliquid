@@ -1,0 +1,35 @@
+use ed25519_dalek::{ SigningKey, VerifyingKey };
+use dotenv::dotenv;
+use std::env;
+use hex::FromHex;
+use std::collections::HashSet;
+
+pub fn retrieve_signing_key(node_id: usize) -> SigningKey {
+    dotenv().ok();
+    let env_key = format!("SECRET_KEY_{}", node_id);
+    let sk_hex = env::var(env_key).expect("SECRET_KEY not set");
+    let sk_bytes = <[u8; 32]>::from_hex(&sk_hex).expect("Invalid hex");
+
+    SigningKey::from_bytes(&sk_bytes)
+}
+
+pub fn retrieve_validator_set() -> HashSet<VerifyingKey> {
+    dotenv().ok();
+
+    let num_validators = env
+        ::var("NUM_VALIDATORS")
+        .expect("NUM_VALIDATORS not set")
+        .parse::<usize>()
+        .expect("NUM_VALIDATORS must be a number");
+
+    let mut validator_set = HashSet::new();
+    for i in 0..num_validators {
+        let env_key = format!("PUBLIC_KEY_{}", i);
+        let pk_hex = env::var(&env_key).expect(&format!("{} not set", &env_key));
+
+        let pk_bytes = <[u8; 32]>::from_hex(&pk_hex).expect("Invalid hex");
+        let pk = VerifyingKey::from_bytes(&pk_bytes).expect("Invalid public key bytes");
+        validator_set.insert(pk);
+    }
+    validator_set
+}
