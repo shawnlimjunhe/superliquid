@@ -1,15 +1,17 @@
-use std::collections::HashSet;
+use std::collections::{ HashMap, HashSet };
 
 use ed25519_dalek::{ SigningKey, VerifyingKey, Signer };
 
 use super::{
-    block::Block,
-    crypto::{ PartialSig, QuorumCertificate },
-    message::{ HotStuffMessage, HotStuffMessageType },
+    block::{ Block, BlockHash },
     config,
+    crypto::{ PartialSig, QuorumCertificate },
+    message::{ self, HotStuffMessage, HotStuffMessageType },
 };
 
 pub type ViewNumber = u64;
+
+type MessageKey = (BlockHash, ViewNumber, HotStuffMessageType);
 
 pub struct HotStuffReplica {
     pub validator_set: HashSet<VerifyingKey>,
@@ -69,5 +71,104 @@ impl HotStuffReplica {
         view_number: ViewNumber
     ) -> bool {
         qc.message_type == message_type && qc.view_number == view_number
+    }
+
+    fn quorum_threshold(&self) -> usize {
+        let n = self.validator_set.len();
+        2 * ((n - 1) / 3) + 1
+    }
+
+    pub fn get_highest_vote_group<'a>(votes: Vec<&'a HotStuffMessage>) -> Vec<&'a HotStuffMessage> {
+        if votes.len() < 2 {
+            return votes; // returns Vec<&HotStuffMessage>
+        }
+
+        let mut groups: HashMap<MessageKey, Vec<&'a HotStuffMessage>> = HashMap::new();
+        let mut max_key: Option<MessageKey> = None;
+        let mut max_size: usize = 0;
+
+        // aggregates votes by message_key
+        for vote in votes {
+            let message_key = (vote.node.hash(), vote.view_number, vote.message_type.clone());
+            let cloned_message_key = message_key.clone();
+            let group = groups.entry(message_key).or_default();
+            group.push(vote);
+
+            if group.len() > max_size {
+                max_key = Some(cloned_message_key);
+                max_size = group.len();
+            }
+        }
+
+        let key = match max_key {
+            Some(message_key) => message_key,
+            None => {
+                return vec![];
+            }
+        };
+
+        // return group with the highest count
+        // in this case, we dont really care if there are mulitple groups with the same count
+        groups.get(&key).cloned().unwrap_or_default()
+    }
+
+    fn validate_vote_signatures<'a>(
+        &self,
+        votes: &'a Vec<HotStuffMessage>
+    ) -> Vec<&'a HotStuffMessage> {
+        let mut validated_votes = vec![];
+
+        let validator_set = &self.validator_set;
+        let mut seen_validators = HashSet::new();
+
+        for vote in votes.iter() {
+            if let Some(partial_sig) = &vote.partial_sig {
+                let verifying_key = &partial_sig.signer_id;
+
+                if !validator_set.contains(verifying_key) || !seen_validators.insert(verifying_key) {
+                    // reject if not part of validator set or validator already voted
+                    continue;
+                }
+
+                if verifying_key.verify_strict(&vote.hash(), &partial_sig.signature).is_ok() {
+                    validated_votes.push(vote);
+                }
+            }
+        }
+
+        validated_votes
+    }
+
+    pub fn validate_votes(&self, votes: &Vec<HotStuffMessage>) -> bool {
+        // validate votes:
+        // - all from known validators
+        // - same block hash, view, type
+        // - signatures are valid
+        // - valid votes above quorum
+
+        if votes.len() > self.validator_set.len() {
+            return false;
+        }
+
+        let quorum_threhold = self.quorum_threshold();
+
+        // Validate votes before grouping to defend against spam
+        let validated_votes = self.validate_vote_signatures(&votes);
+
+        if validated_votes.len() < quorum_threhold {
+            return false;
+        }
+
+        let votes = Self::get_highest_vote_group(validated_votes);
+
+        votes.len() >= quorum_threhold
+    }
+
+    pub fn from_votes(&self, votes: &Vec<HotStuffMessage>) -> Option<QuorumCertificate> {
+        if self.validate_votes(votes) {
+            QuorumCertificate::from_votes_unchecked(votes)
+        } else {
+            None
+        }
     }
 }

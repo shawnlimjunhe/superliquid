@@ -11,10 +11,16 @@ pub struct BlockStore {
     blocks: HashMap<BlockHash, Block>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub enum BlockViewNum {
+    Genesis,
+    Chained(ViewNumber),
+}
+
 pub struct Block {
     parent_id: BlockHash,
     cmd: Command,
-    view_number: ViewNumber,
+    view_number: BlockViewNum,
     justify: Option<Box<QuorumCertificate>>,
 }
 
@@ -22,7 +28,7 @@ pub struct Block {
 struct HashableBlock {
     parent_id: BlockHash,
     cmd_hash: Sha256Hash,
-    view_number: ViewNumber,
+    view_number: BlockViewNum,
 }
 
 impl Block {

@@ -8,7 +8,7 @@ use super::{
     replica::ViewNumber,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum HotStuffMessageType {
     NewView,
     Prepare,
