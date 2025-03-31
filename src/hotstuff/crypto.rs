@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
+use crate::types::Sha256Hash;
 use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
-use crate::types::Sha256Hash;
 
 use super::{
     block::BlockHash,
-    message::{ HotStuffMessage, HotStuffMessageType },
+    message::{HotStuffMessage, HotStuffMessageType},
     replica::ViewNumber,
 };
 
@@ -19,7 +19,7 @@ pub struct PartialSig {
 pub struct QuorumCertificate {
     pub message_type: HotStuffMessageType,
     pub view_number: ViewNumber,
-    block_hash: BlockHash,
+    pub block_hash: BlockHash,
     message_hash: Sha256Hash,
     partial_sigs: Vec<PartialSig>,
 }
@@ -33,10 +33,7 @@ impl QuorumCertificate {
         let view_number = first_vote.view_number;
         let message_type = first_vote.message_type.clone();
 
-        let sigs = votes
-            .iter()
-            .filter_map(|v| v.partial_sig.clone())
-            .collect();
+        let sigs = votes.iter().filter_map(|v| v.partial_sig.clone()).collect();
 
         Some(QuorumCertificate {
             message_type,

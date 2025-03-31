@@ -1,12 +1,12 @@
-use crate::types::{ Sha256Hash, Transaction };
-use serde::{ Serialize, Deserialize };
+use crate::types::{Sha256Hash, Transaction};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Command {
+pub struct ClientCommand {
     transactions: Transaction,
 }
 
-impl Command {
+impl ClientCommand {
     pub fn hash(&self) -> Sha256Hash {
         return self.transactions.hash();
     }

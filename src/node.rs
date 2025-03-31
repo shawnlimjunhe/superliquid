@@ -1,11 +1,17 @@
-use tokio::{ net::{ TcpListener, TcpStream }, sync };
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync,
+};
 
-use std::collections::{ HashMap, HashSet };
+use std::collections::{HashMap, HashSet};
 use std::io::Result;
-use std::sync::{ Arc, Mutex };
+use std::sync::{Arc, Mutex};
 
-use crate::types::Transaction;
-use crate::message_protocol::{ self, send_transaction, AppMessage };
+use crate::{
+    hotstuff::message::HotStuffMessage,
+    message_protocol::{self, AppMessage, send_transaction},
+};
+use crate::{hotstuff::replica::HotStuffReplica, node, types::Transaction};
 
 struct Node {
     id: String,
@@ -14,22 +20,23 @@ struct Node {
     seen_transactions: HashSet<[u8; 32]>,
     peers: Vec<String>,
     peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
+    pub replica: HotStuffReplica,
 }
 
 pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Result<()> {
     // Bind the listener to the address
     let listener = TcpListener::bind(addr).await?;
     let peer_connections = connect_to_peers(&peers).await?;
-    let node = Arc::new(
-        Mutex::new(Node {
-            id: format!("node-{}", node_index),
-            _is_leader: true,
-            transactions: vec![],
-            seen_transactions: HashSet::new(),
-            peers: peers,
-            peer_connections: peer_connections,
-        })
-    );
+
+    let node = Arc::new(Mutex::new(Node {
+        id: format!("node-{}", node_index),
+        _is_leader: true,
+        transactions: vec![],
+        seen_transactions: HashSet::new(),
+        peers: peers,
+        peer_connections: peer_connections,
+        replica: HotStuffReplica::new(node_index),
+    }));
 
     println!("Listening on addr: {:?}", addr);
     loop {
@@ -65,8 +72,16 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Res
     Ok(())
 }
 
+async fn broadcast_hotstuff(mut socket: &mut TcpStream, msg: HotStuffMessage) {
+    todo!()
+}
+
+async fn send_to(mut socket: &mut TcpStream, msg: HotStuffMessage, peer_id: usize) {
+    todo!()
+}
+
 async fn connect_to_peers(
-    peers: &Vec<String>
+    peers: &Vec<String>,
 ) -> Result<HashMap<String, Arc<sync::Mutex<TcpStream>>>> {
     let mut peer_connections = HashMap::new();
 
@@ -87,7 +102,7 @@ async fn connect_to_peers(
 async fn handle_transaction(
     mut socket: &mut TcpStream,
     node: &Arc<Mutex<Node>>,
-    tx: Transaction
+    tx: Transaction,
 ) -> Result<()> {
     println!("Received Transaction: {:?}", tx);
     {
