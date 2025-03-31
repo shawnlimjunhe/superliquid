@@ -29,7 +29,7 @@ pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Resu
     let listener = TcpListener::bind(addr).await?;
     let peer_connections = connect_to_peers(&peers).await?;
 
-    let node = Arc::new(Mutex::new(Node {
+    let node = Arc::new(sync::Mutex::new(Node {
         id: format!("node-{}", node_index),
         _is_leader: true,
         transactions: vec![],
@@ -53,10 +53,10 @@ pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Resu
     }
 }
 
-async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Result<()> {
+async fn handle_connection(mut socket: TcpStream, node: Arc<sync::Mutex<Node>>) -> Result<()> {
     loop {
         let timeout_duration = {
-            let node = node.lock().unwrap();
+            let node = node.lock().await;
             node.replica.pacemaker.time_remaining()
         };
 
@@ -78,7 +78,7 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Res
             }
 
             _ = tokio::time::sleep(timeout_duration) => {
-                let mut node = node.lock().unwrap();
+                let mut node = node.lock().await;
                 node.replica.pacemaker.advance_view();
                 // broadcast new view;
             }
@@ -128,12 +128,12 @@ async fn connect_to_peers(
 
 async fn handle_transaction(
     mut socket: &mut TcpStream,
-    node: &Arc<Mutex<Node>>,
+    node: &Arc<sync::Mutex<Node>>,
     tx: Transaction,
 ) -> Result<()> {
     println!("Received Transaction: {:?}", tx);
     {
-        let mut node = node.lock().expect("Lock failed");
+        let mut node = node.lock().await;
 
         if node.seen_transactions.insert(tx.hash()) {
             node.transactions.push(tx.clone());
@@ -142,7 +142,7 @@ async fn handle_transaction(
     message_protocol::send_ack(&mut socket).await?;
 
     let peer_connections: Vec<Arc<sync::Mutex<TcpStream>>> = {
-        let node = node.lock().expect("Lock failed");
+        let node = node.lock().await;
         node.peer_connections.values().cloned().collect()
     };
 
@@ -157,10 +157,10 @@ async fn handle_transaction(
     Ok(())
 }
 
-async fn handle_query(mut socket: &mut TcpStream, node: &Arc<Mutex<Node>>) -> Result<()> {
+async fn handle_query(mut socket: &mut TcpStream, node: &Arc<sync::Mutex<Node>>) -> Result<()> {
     println!("Received a query");
     let txs = {
-        let node = node.lock().expect("Lock failed");
+        let node = node.lock().await;
         node.transactions.clone()
     };
     message_protocol::send_message(
