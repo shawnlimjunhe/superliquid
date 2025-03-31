@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::types::Sha256Hash;
-use ed25519::Signature;
+use ed25519::{Signature, signature};
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
@@ -19,11 +19,21 @@ pub struct PartialSig {
         deserialize_with = "hexstring::deserialize_verifying_key"
     )]
     pub signer_id: VerifyingKey,
+
     #[serde(
         serialize_with = "hexstring::serialize_signature",
         deserialize_with = "hexstring::deserialize_signature"
     )]
     pub signature: Signature,
+}
+
+impl PartialSig {
+    pub fn new(signer_id: VerifyingKey, signature: Signature) -> Self {
+        Self {
+            signer_id,
+            signature,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -78,5 +88,40 @@ impl QuorumCertificate {
         }
 
         valid_sig_count >= quorum_size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519::signature::SignerMut;
+    use ed25519_dalek::SigningKey;
+
+    use crate::hotstuff::crypto::PartialSig;
+
+    #[test]
+    fn test_signature_serialization_round_trip() {
+        let mut signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let verifying_key = signing_key.verifying_key();
+        let message = b"hello consensus";
+        let signature = signing_key.sign(message);
+
+        let partialsig = PartialSig::new(verifying_key, signature);
+
+        // Serialize
+        let json = serde_json::to_string(&partialsig).expect("Failed to serialize signature");
+
+        // Deserialize
+        let deserialized: PartialSig =
+            serde_json::from_str(&json).expect("Failed to deserialize signature");
+
+        assert_eq!(
+            partialsig.signature.to_bytes(),
+            deserialized.signature.to_bytes()
+        );
+
+        assert_eq!(
+            partialsig.signer_id.to_bytes(),
+            deserialized.signer_id.to_bytes()
+        );
     }
 }

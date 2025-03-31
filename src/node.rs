@@ -40,6 +40,7 @@ pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Resu
     }));
 
     println!("Listening on addr: {:?}", addr);
+
     loop {
         let (socket, _) = listener.accept().await?;
         let node = node.clone();

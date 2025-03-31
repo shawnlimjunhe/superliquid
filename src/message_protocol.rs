@@ -38,8 +38,8 @@ pub async fn send_transaction(stream: &mut TcpStream, tx: Transaction) -> Result
     let msg = AppMessage::SubmitTransaction(tx);
     send_message(stream, &Message::Application(msg)).await?;
 
-    match network::receive_json::<AppMessage, TcpStream>(stream).await? {
-        AppMessage::Ack => Ok(()), // basic ACK
+    match receive_message(stream).await? {
+        Message::Application(AppMessage::Ack) => Ok(()), // basic ACK
         other => Err(Error::new(
             ErrorKind::InvalidData,
             format!("Expected Response, got {:?}", other),
@@ -51,8 +51,8 @@ pub async fn send_query(stream: &mut TcpStream) -> Result<Vec<Transaction>> {
     let msg = AppMessage::Query;
     send_message(stream, &Message::Application(msg)).await?;
 
-    match network::receive_json::<AppMessage, TcpStream>(stream).await? {
-        AppMessage::Response(txs) => Ok(txs), // basic ACK
+    match receive_message(stream).await? {
+        Message::Application(AppMessage::Response(txs)) => Ok(txs), // basic ACK
         other => Err(Error::new(
             ErrorKind::InvalidData,
             format!("Expected Response, got {:?}", other),
