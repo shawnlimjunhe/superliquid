@@ -82,7 +82,7 @@ impl HotStuffReplica {
     }
 
     pub fn matching_qc(
-        qc: QuorumCertificate,
+        qc: &QuorumCertificate,
         message_type: HotStuffMessageType,
         view_number: ViewNumber,
     ) -> bool {
@@ -228,14 +228,6 @@ impl HotStuffReplica {
             .max_by_key(|qc| qc.view_number)
     }
 
-    pub fn handle_prepare(self, message: HotStuffMessage) {
-        todo!()
-    }
-
-    pub fn make_vote(&self) -> HotStuffMessage {
-        todo!()
-    }
-
     // hot stuff phases
     pub fn leader_prepare(
         &mut self,
@@ -302,22 +294,89 @@ impl HotStuffReplica {
         ));
     }
 
-    pub fn replica_precommit(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {
-        todo!()
+    pub fn replica_precommit(&mut self, msg: &HotStuffMessage) -> Option<HotStuffMessage> {
+        let Some(qc) = msg.justify.clone() else {
+            // no qc to validate
+            return None;
+        };
+
+        if qc.verify(&self.validator_set, self.quorum_threshold()) {
+            self.prepare_qc = Some(qc.clone());
+            let Some(node) = self.blockstore.get(&qc.block_hash) else {
+                return None;
+            };
+            return Some(HotStuffMessage::new(
+                HotStuffMessageType::PreCommit,
+                Some(node.clone()),
+                None,
+                self.view_number,
+            ));
+        }
+        None
     }
     pub fn leader_commit(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {
-        todo!()
+        let Some(qc) = self.create_qc_from_votes(votes) else {
+            // unable to form a QC
+            return None;
+        };
+
+        self.precommit_qc = Some(qc.clone());
+        return Some(HotStuffMessage::new(
+            HotStuffMessageType::Commit,
+            None,
+            Some(qc),
+            self.view_number,
+        ));
     }
 
-    pub fn replica_commit(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {
-        todo!()
+    pub fn replica_commit(&mut self, msg: &HotStuffMessage) -> Option<HotStuffMessage> {
+        let Some(qc) = msg.justify.clone() else {
+            // no qc to validate
+            return None;
+        };
+
+        if qc.verify(&self.validator_set, self.quorum_threshold()) {
+            self.locked_qc = Some(qc.clone());
+            let Some(node) = self.blockstore.get(&qc.block_hash) else {
+                return None;
+            };
+            return Some(HotStuffMessage::new(
+                HotStuffMessageType::Commit,
+                Some(node.clone()),
+                None,
+                self.view_number,
+            ));
+        }
+        None
     }
 
     pub fn leader_decide(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {
-        todo!()
+        let Some(qc) = self.create_qc_from_votes(votes) else {
+            // unable to form a QC
+            return None;
+        };
+
+        self.commit_qc = Some(qc.clone());
+
+        // do commit here
+        return Some(HotStuffMessage::new(
+            HotStuffMessageType::Decide,
+            None,
+            Some(qc),
+            self.view_number,
+        ));
     }
 
-    pub fn replica_decide(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {
-        todo!()
+    pub fn replica_decide(&mut self, msg: &HotStuffMessage) {
+        let Some(qc) = msg.justify.clone() else {
+            // no qc to validate
+            return;
+        };
+
+        if qc.verify(&self.validator_set, self.quorum_threshold())
+            && Self::matching_qc(&qc, HotStuffMessageType::Commit, self.view_number)
+        {
+            // execute commands in qc.node here
+        }
     }
 }
