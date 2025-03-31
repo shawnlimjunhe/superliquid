@@ -1,4 +1,4 @@
-use std::time::{ Duration, Instant };
+use std::time::{Duration, Instant};
 
 use super::config;
 
@@ -24,6 +24,7 @@ impl Pacemaker {
     }
 
     pub fn advance_view(&mut self) {
+        println!("advancing view");
         self.curr_view += 1;
         self.last_view_change = Instant::now();
     }
@@ -35,5 +36,10 @@ impl Pacemaker {
 
     pub fn current_leader(&self, replica_ids: &[usize]) -> usize {
         replica_ids[(self.curr_view as usize) % replica_ids.len()]
+    }
+
+    pub fn time_remaining(&self) -> Duration {
+        let end_time = self.last_view_change + self.timeout;
+        end_time.saturating_duration_since(Instant::now())
     }
 }

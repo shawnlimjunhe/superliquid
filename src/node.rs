@@ -55,23 +55,35 @@ pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Resu
 
 async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Result<()> {
     loop {
-        let message = message_protocol::receive_message(&mut socket).await?;
+        let timeout_duration = {
+            let node = node.lock().unwrap();
+            node.replica.pacemaker.time_remaining()
+        };
 
-        match message {
-            Message::Application(AppMessage::SubmitTransaction(tx)) => {
-                handle_transaction(&mut socket, &node, tx).await?;
+        tokio::select! {
+            result = message_protocol::receive_message(&mut socket) => {
+                let message = result?;
+                match message {
+                    Message::Application(AppMessage::SubmitTransaction(tx)) => {
+                        handle_transaction(&mut socket, &node, tx).await?;
+                    }
+                    Message::Application(AppMessage::Query) => {
+                        handle_query(&mut socket, &node).await?;
+                    }
+                    Message::Application(AppMessage::End) => {
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
-            Message::Application(AppMessage::Query) => {
-                handle_query(&mut socket, &node).await?;
+
+            _ = tokio::time::sleep(timeout_duration) => {
+                let mut node = node.lock().unwrap();
+                node.replica.pacemaker.advance_view();
+                // broadcast new view;
             }
-            Message::Application(AppMessage::End) => {
-                break;
-            }
-            _ => {}
         }
     }
-
-    Ok(())
 }
 
 async fn broadcast_hotstuff_message(node: &Arc<Mutex<Node>>, msg: HotStuffMessage) -> Result<()> {

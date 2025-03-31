@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::types::Sha256Hash;
-use ed25519::{Signature, signature};
+use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
