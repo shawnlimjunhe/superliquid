@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
-use crate::{hotstuff::client_command::ClientCommand, types::Sha256Hash};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use crate::{ hotstuff::client_command::ClientCommand, types::Sha256Hash };
+use serde::{ Deserialize, Serialize };
+use sha2::{ Digest, Sha256 };
 
-use super::{crypto::QuorumCertificate, replica::ViewNumber};
+use super::{ crypto::QuorumCertificate, replica::ViewNumber };
 
 pub type BlockHash = Sha256Hash;
 
+#[derive(Clone)]
 pub enum Block {
     Genesis {
         cmd: ClientCommand,
@@ -40,22 +41,26 @@ impl Block {
     pub fn extends_from(
         &self,
         locked_block_hash: BlockHash,
-        block_store: &HashMap<BlockHash, Block>,
+        block_store: &HashMap<BlockHash, Block>
     ) -> bool {
         let mut current = self;
 
         // check 3 parents up
         for _ in 0..3 {
             match current {
-                Block::Genesis { .. } => return false,
+                Block::Genesis { .. } => {
+                    return false;
+                }
                 Block::Normal { parent_id, .. } => {
                     if *parent_id == locked_block_hash {
                         return true;
                     }
                     current = match block_store.get(parent_id) {
                         Some(node) => node,
-                        None => return false, // missing parent, unsafe
-                    }
+                        None => {
+                            return false;
+                        } // missing parent, unsafe
+                    };
                 }
             }
         }
@@ -65,12 +70,7 @@ impl Block {
     pub fn hash(&self) -> BlockHash {
         match self {
             Self::Genesis { .. } => Sha256::digest(b"GENESIS").into(),
-            Self::Normal {
-                parent_id,
-                cmd,
-                view_number,
-                ..
-            } => {
+            Self::Normal { parent_id, cmd, view_number, .. } => {
                 let hashable = HashableBlock {
                     parent_id: *parent_id,
                     cmd_hash: cmd.hash(),

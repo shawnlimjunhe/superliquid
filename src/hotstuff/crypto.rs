@@ -6,7 +6,7 @@ use ed25519_dalek::VerifyingKey;
 
 use super::{
     block::BlockHash,
-    message::{HotStuffMessage, HotStuffMessageType},
+    message::{ HotStuffMessage, HotStuffMessageType },
     replica::ViewNumber,
 };
 
@@ -16,6 +16,7 @@ pub struct PartialSig {
     pub signature: Signature,
 }
 
+#[derive(Clone)]
 pub struct QuorumCertificate {
     pub message_type: HotStuffMessageType,
     pub view_number: ViewNumber,
@@ -33,7 +34,10 @@ impl QuorumCertificate {
         let view_number = first_vote.view_number;
         let message_type = first_vote.message_type.clone();
 
-        let sigs = votes.iter().filter_map(|v| v.partial_sig.clone()).collect();
+        let sigs = votes
+            .iter()
+            .filter_map(|v| v.partial_sig.clone())
+            .collect();
 
         Some(QuorumCertificate {
             message_type,

@@ -1,8 +1,8 @@
-use std::time::{Duration, Instant};
+use std::time::{ Duration, Instant };
 
 use super::config;
 
-use super::replica::{self, ViewNumber};
+use super::replica::ViewNumber;
 
 pub struct Pacemaker {
     pub curr_view: ViewNumber,
@@ -34,6 +34,6 @@ impl Pacemaker {
     }
 
     pub fn current_leader(&self, replica_ids: &[usize]) -> usize {
-        replica_ids[self.curr_view as usize % replica_ids.len()]
+        replica_ids[(self.curr_view as usize) % replica_ids.len()]
     }
 }
