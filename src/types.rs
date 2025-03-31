@@ -1,7 +1,7 @@
-use serde::{ Serialize, Deserialize };
-use sha2::{ Digest, Sha256 };
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::{ hotstuff::message::HotStuffMessage, message_protocol::AppMessage };
+use crate::{hotstuff::message::HotStuffMessage, message_protocol::AppMessage};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaction {
@@ -20,6 +20,7 @@ impl Transaction {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
     Application(AppMessage),
     HotStuff(HotStuffMessage),

@@ -17,6 +17,7 @@ pub enum HotStuffMessageType {
     Decide,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HotStuffMessage {
     pub message_type: HotStuffMessageType,
     pub view_number: ViewNumber,

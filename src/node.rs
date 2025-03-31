@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     hotstuff::message::HotStuffMessage,
-    message_protocol::{self, AppMessage, send_transaction},
+    message_protocol::{self, AppMessage, send_app_message, send_transaction},
 };
 use crate::{hotstuff::replica::HotStuffReplica, node, types::Transaction};
 
@@ -53,7 +53,7 @@ pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Resu
 
 async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Result<()> {
     loop {
-        let message = message_protocol::receive_message(&mut socket).await?;
+        let message = message_protocol::receive_app_message(&mut socket).await?;
 
         match message {
             AppMessage::SubmitTransaction(tx) => {
@@ -72,8 +72,25 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Res
     Ok(())
 }
 
-async fn broadcast_hotstuff(mut socket: &mut TcpStream, msg: HotStuffMessage) {
-    todo!()
+async fn broadcast_hotstuff_message(
+    mut socket: &mut TcpStream,
+    node: &Arc<Mutex<Node>>,
+    msg: HotStuffMessage,
+) -> Result<()> {
+    let peer_connections: Vec<Arc<sync::Mutex<TcpStream>>> = {
+        let node = node.lock().expect("Lock failed");
+        node.peer_connections.values().cloned().collect()
+    };
+
+    for stream in peer_connections {
+        let cloned_tx = message_protocol::send_hotstuff_message;
+        tokio::spawn(async move {
+            let mut stream = stream.lock().await;
+            send_app_message(&mut stream, cloned_tx).await
+        });
+    }
+
+    Ok(())
 }
 
 async fn send_to(mut socket: &mut TcpStream, msg: HotStuffMessage, peer_id: usize) {
@@ -136,5 +153,5 @@ async fn handle_query(mut socket: &mut TcpStream, node: &Arc<Mutex<Node>>) -> Re
         let node = node.lock().expect("Lock failed");
         node.transactions.clone()
     };
-    message_protocol::send_message(&mut socket, &AppMessage::Response(txs)).await
+    message_protocol::send_app_message(&mut socket, &AppMessage::Response(txs)).await
 }
