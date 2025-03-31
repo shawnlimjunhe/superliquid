@@ -50,7 +50,11 @@ impl QuorumCertificate {
         // assume all votes are valid and consistent
         let first_vote = votes.first()?;
 
-        let block_hash = first_vote.node.hash();
+        let block_hash = match &first_vote.node {
+            Some(block) => block.hash(),
+            None => [0; 32],
+        };
+
         let view_number = first_vote.view_number;
         let message_type = first_vote.message_type.clone();
 

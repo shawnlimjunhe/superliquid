@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use rand_core::block;
 
 use super::{
     block::{Block, BlockHash},
@@ -67,7 +68,7 @@ impl HotStuffReplica {
         qc: QuorumCertificate,
         curr_view: ViewNumber,
     ) -> HotStuffMessage {
-        let mut message = HotStuffMessage::new(message_type, node, qc, curr_view);
+        let mut message = HotStuffMessage::new(message_type, Some(node), Some(qc), curr_view);
         message.partial_sig = Some(self.sign(&message));
         message
     }
@@ -104,11 +105,12 @@ impl HotStuffReplica {
 
         // aggregates votes by message_key
         for vote in votes {
-            let message_key = (
-                vote.node.hash(),
-                vote.view_number,
-                vote.message_type.clone(),
-            );
+            let block_hash = match &vote.node {
+                Some(block) => block.hash(),
+                None => [0; 32],
+            };
+
+            let message_key = (block_hash, vote.view_number, vote.message_type.clone());
             let cloned_message_key = message_key.clone();
             let group = groups.entry(message_key).or_default();
             group.push(vote);
@@ -187,7 +189,7 @@ impl HotStuffReplica {
         votes.len() >= quorum_threhold
     }
 
-    pub fn from_votes(&self, votes: &Vec<HotStuffMessage>) -> Option<QuorumCertificate> {
+    pub fn create_qc_from_votes(&self, votes: &Vec<HotStuffMessage>) -> Option<QuorumCertificate> {
         if self.validate_votes(votes) {
             QuorumCertificate::from_votes_unchecked(votes)
         } else {
@@ -195,8 +197,8 @@ impl HotStuffReplica {
         }
     }
 
-    pub fn safe_node(self, block: Block, qc: QuorumCertificate) -> bool {
-        match self.locked_qc {
+    pub fn safe_node(&self, block: &Block, qc: QuorumCertificate) -> bool {
+        match &self.locked_qc {
             Some(locked_qc) => {
                 let locked_block_hash = locked_qc.block_hash;
                 let extends = block.extends_from(locked_block_hash, &self.blockstore);
@@ -255,18 +257,49 @@ impl HotStuffReplica {
 
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Prepare,
-            new_block,
-            high_qc.clone(),
+            Some(new_block),
+            Some(high_qc.clone()),
             self.view_number,
         ));
     }
 
-    pub fn replica_prepare(self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
-        todo!()
+    pub fn replica_prepare(&self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
+        let Some(msg_justify_qc) = msg.justify else {
+            return None;
+        };
+
+        let Some(block) = &msg.node else {
+            return None;
+        };
+
+        if !block.extends_from(msg_justify_qc.block_hash, &self.blockstore) {
+            return None;
+        }
+
+        if self.safe_node(block, msg_justify_qc) {
+            return Some(HotStuffMessage::new(
+                HotStuffMessageType::Prepare,
+                msg.node.clone(),
+                None,
+                self.view_number,
+            ));
+        }
+        None
     }
 
     pub fn leader_precommit(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {
-        todo!()
+        let Some(qc) = self.create_qc_from_votes(votes) else {
+            // unable to form a QC
+            return None;
+        };
+
+        self.prepare_qc = Some(qc.clone());
+        return Some(HotStuffMessage::new(
+            HotStuffMessageType::PreCommit,
+            None,
+            Some(qc),
+            self.view_number,
+        ));
     }
 
     pub fn replica_precommit(&mut self, votes: &Vec<HotStuffMessage>) -> Option<HotStuffMessage> {

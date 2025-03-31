@@ -21,7 +21,7 @@ pub enum HotStuffMessageType {
 pub struct HotStuffMessage {
     pub message_type: HotStuffMessageType,
     pub view_number: ViewNumber,
-    pub node: Block,
+    pub node: Option<Block>,
     pub justify: Option<QuorumCertificate>,
     pub partial_sig: Option<PartialSig>,
 }
@@ -36,24 +36,28 @@ pub struct HashableMessage {
 impl HotStuffMessage {
     pub fn new(
         message_type: HotStuffMessageType,
-        node: Block,
-        qc: QuorumCertificate,
+        node: Option<Block>,
+        option_qc: Option<QuorumCertificate>,
         curr_view: ViewNumber,
     ) -> Self {
         Self {
             message_type,
             view_number: curr_view,
             node,
-            justify: Some(qc),
+            justify: option_qc,
             partial_sig: None,
         }
     }
 
     pub fn hash(&self) -> Sha256Hash {
+        let block_hash = match &self.node {
+            Some(block) => block.hash(),
+            None => [0; 32],
+        };
         let hashable = HashableMessage {
             message_type: self.message_type.clone(),
             view_number: self.view_number,
-            block_hash: self.node.hash(),
+            block_hash,
         };
 
         let encoded = bincode::serialize(&hashable).unwrap();
