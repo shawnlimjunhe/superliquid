@@ -1,18 +1,15 @@
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync,
-};
-
-use std::collections::{HashMap, HashSet};
+use tokio::{ net::{ TcpListener, TcpStream }, sync };
+use futures::future::join_all;
+use std::collections::{ HashMap, HashSet };
 use std::io::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::{ Arc, Mutex };
 
 use crate::{
     hotstuff::message::HotStuffMessage,
-    message_protocol::{self, AppMessage, send_message, send_transaction},
+    message_protocol::{ self, AppMessage, send_message, send_transaction },
     types::Message,
 };
-use crate::{hotstuff::replica::HotStuffReplica, node, types::Transaction};
+use crate::{ hotstuff::replica::HotStuffReplica, node, types::Transaction };
 
 struct Node {
     id: String,
@@ -24,25 +21,57 @@ struct Node {
     pub replica: HotStuffReplica,
 }
 
-pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Result<()> {
+pub async fn run_node(
+    client_addr: &str,
+    peer_addr: &str,
+    peers: Vec<String>,
+    node_index: usize
+) -> Result<()> {
     // Bind the listener to the address
-    let listener = TcpListener::bind(addr).await?;
-    let peer_connections = connect_to_peers(&peers).await?;
+    let peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>> = connect_to_peers(
+        &peers
+    ).await?;
 
-    let node = Arc::new(sync::Mutex::new(Node {
-        id: format!("node-{}", node_index),
-        _is_leader: true,
-        transactions: vec![],
-        seen_transactions: HashSet::new(),
-        peers: peers,
-        peer_connections: peer_connections,
-        replica: HotStuffReplica::new(node_index),
-    }));
+    let node = Arc::new(
+        sync::Mutex::new(Node {
+            id: format!("node-{}", node_index),
+            _is_leader: true,
+            transactions: vec![],
+            seen_transactions: HashSet::new(),
+            peers: peers,
+            peer_connections: peer_connections,
+            replica: HotStuffReplica::new(node_index),
+        })
+    );
 
-    println!("Listening on addr: {:?}", addr);
+    tokio::spawn(run_client_listener(client_addr.to_owned(), node.clone()));
+    tokio::spawn(run_peer_listener(peer_addr.to_owned(), node.clone()));
+
+    Ok(())
+}
+
+async fn run_peer_listener(peer_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
+    let peer_listener: TcpListener = TcpListener::bind(&peer_addr).await?;
+    println!("Listening to peers on {:?}", peer_addr);
 
     loop {
-        let (socket, _) = listener.accept().await?;
+        let (socket, _) = peer_listener.accept().await?;
+        let node = node.clone();
+        tokio::spawn(async move {
+            match handle_connection(socket, node).await {
+                Ok(()) => println!("Success"),
+                Err(e) => println!("Failed due to: {:?}", e),
+            }
+        });
+    }
+}
+
+async fn run_client_listener(client_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
+    let client_listener: TcpListener = TcpListener::bind(&client_addr).await?;
+    println!("Listening to client on {:?}", client_addr);
+
+    loop {
+        let (socket, _) = client_listener.accept().await?;
         let node = node.clone();
         tokio::spawn(async move {
             match handle_connection(socket, node).await {
@@ -55,33 +84,18 @@ pub async fn run_node(addr: &str, peers: Vec<String>, node_index: usize) -> Resu
 
 async fn handle_connection(mut socket: TcpStream, node: Arc<sync::Mutex<Node>>) -> Result<()> {
     loop {
-        let timeout_duration = {
-            let node = node.lock().await;
-            node.replica.pacemaker.time_remaining()
-        };
-
-        tokio::select! {
-            result = message_protocol::receive_message(&mut socket) => {
-                let message = result?;
-                match message {
-                    Message::Application(AppMessage::SubmitTransaction(tx)) => {
-                        handle_transaction(&mut socket, &node, tx).await?;
-                    }
-                    Message::Application(AppMessage::Query) => {
-                        handle_query(&mut socket, &node).await?;
-                    }
-                    Message::Application(AppMessage::End) => {
-                        return Ok(());
-                    }
-                    _ => {}
-                }
+        let message = message_protocol::receive_message(&mut socket).await?;
+        match message {
+            Message::Application(AppMessage::SubmitTransaction(tx)) => {
+                handle_transaction(&mut socket, &node, tx).await?;
             }
-
-            _ = tokio::time::sleep(timeout_duration) => {
-                let mut node = node.lock().await;
-                node.replica.pacemaker.advance_view();
-                // broadcast new view;
+            Message::Application(AppMessage::Query) => {
+                handle_query(&mut socket, &node).await?;
             }
+            Message::Application(AppMessage::End) => {
+                return Ok(());
+            }
+            _ => {}
         }
     }
 }
@@ -108,15 +122,18 @@ async fn send_to(mut socket: &mut TcpStream, msg: HotStuffMessage, peer_id: usiz
 }
 
 async fn connect_to_peers(
-    peers: &Vec<String>,
+    peers: &Vec<String>
 ) -> Result<HashMap<String, Arc<sync::Mutex<TcpStream>>>> {
     let mut peer_connections = HashMap::new();
 
     for peer_addr in peers.iter() {
         match TcpStream::connect(peer_addr).await {
             Ok(stream) => {
+                let peer_add = &stream.peer_addr().unwrap().clone();
+                let local_addr = &stream.local_addr().unwrap().clone();
+
                 peer_connections.insert(peer_addr.clone(), Arc::new(sync::Mutex::new(stream)));
-                println!("Connected to peer at {}", peer_addr);
+                println!("Connected to peer at: {:?} from: {:?}", peer_add, local_addr);
             }
             Err(e) => {
                 eprintln!("Failed to connect to {}: {:?}", peer_addr, e);
@@ -129,43 +146,59 @@ async fn connect_to_peers(
 async fn handle_transaction(
     mut socket: &mut TcpStream,
     node: &Arc<sync::Mutex<Node>>,
-    tx: Transaction,
+    tx: Transaction
 ) -> Result<()> {
-    println!("Received Transaction: {:?}", tx);
-    {
+    println!("Received Transaction: {:?} on addr: {:?}", tx, socket.local_addr());
+    let id = {
         let mut node = node.lock().await;
 
         if node.seen_transactions.insert(tx.hash()) {
             node.transactions.push(tx.clone());
         }
-    }
+        node.id.clone()
+    };
     message_protocol::send_ack(&mut socket).await?;
 
     let peer_connections: Vec<Arc<sync::Mutex<TcpStream>>> = {
         let node = node.lock().await;
         node.peer_connections.values().cloned().collect()
     };
+    let mut tasks = Vec::new();
 
+    println!("broadcasting tx from node {} to {} peers", id, peer_connections.len());
     for stream in peer_connections {
         let cloned_tx = tx.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut stream = stream.lock().await;
             send_transaction(&mut stream, cloned_tx).await
         });
+        tasks.push(task);
     }
+
+    let results = join_all(tasks).await;
+    for result in results {
+        match result {
+            Ok(Ok(())) => {
+                println!("sent transaction ");
+            }
+            Ok(Err(e)) => eprintln!("send_transaction error: {:?}", e),
+            Err(e) => eprintln!("task panicked: {:?}", e),
+        }
+    }
+
+    println!("Finish broadcasting tx");
 
     Ok(())
 }
 
 async fn handle_query(mut socket: &mut TcpStream, node: &Arc<sync::Mutex<Node>>) -> Result<()> {
-    println!("Received a query");
+    println!("Received a query on: {:?} from: {:?}", socket.local_addr(), socket.peer_addr());
     let txs = {
         let node = node.lock().await;
         node.transactions.clone()
     };
     message_protocol::send_message(
         &mut socket,
-        &&Message::Application(AppMessage::Response(txs)),
-    )
-    .await
+        &&Message::Application(AppMessage::Response(txs))
+    ).await
 }

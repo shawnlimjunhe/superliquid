@@ -7,7 +7,7 @@ use tokio::{ net::TcpStream, time::{ sleep, Duration } };
 #[tokio::test]
 async fn test_transaction_round_trip() -> Result<()> {
     tokio::spawn(async {
-        run_node("127.0.0.1:9000", vec![], 0).await.unwrap();
+        run_node("127.0.0.1:9000", "127.0.0.1:8000", vec![], 0).await.unwrap();
     });
 
     // Give the node a moment to start
@@ -37,15 +37,27 @@ async fn test_transaction_round_trip() -> Result<()> {
 #[tokio::test]
 async fn test_transaction_broadcast() -> Result<()> {
     tokio::spawn(async {
-        run_node("127.0.0.1:9002", vec!["127.0.0.1:9001".to_string()], 0).await.unwrap();
+        run_node(
+            "127.0.0.1:2001",
+            "127.0.0.1:3001",
+            vec!["127.0.0.1:3002".to_string()],
+            0
+        ).await.unwrap();
     });
 
+    sleep(Duration::from_millis(250)).await;
+
     tokio::spawn(async {
-        run_node("127.0.0.1:9001", vec!["127.0.0.1:9002".to_string()], 1).await.unwrap();
+        run_node(
+            "127.0.0.1:2002",
+            "127.0.0.1:3002",
+            vec!["127.0.0.1:3001".to_string()],
+            1
+        ).await.unwrap();
     });
 
     // Give the node a moment to start
-    sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(250)).await;
 
     // Run client logic
     let tx = Transaction {
@@ -54,15 +66,16 @@ async fn test_transaction_broadcast() -> Result<()> {
         amount: 42,
     };
 
-    let mut node_0_stream: TcpStream = TcpStream::connect("127.0.0.1:9002").await?;
-    let mut node_1_stream: TcpStream = TcpStream::connect("127.0.0.1:9001").await?;
+    let mut node_0_stream: TcpStream = TcpStream::connect("127.0.0.1:2001").await?;
+    let mut node_1_stream: TcpStream = TcpStream::connect("127.0.0.1:2002").await?;
 
-    let txs: Vec<Transaction> = message_protocol::send_query(&mut node_1_stream).await?;
+    let txs: Vec<Transaction> = message_protocol::send_query(&mut node_0_stream).await?;
     assert_eq!(txs.len(), 0);
 
-    message_protocol::send_transaction(&mut node_0_stream, tx.clone()).await?;
+    message_protocol::send_transaction(&mut node_1_stream, tx.clone()).await?;
 
-    let txs: Vec<Transaction> = message_protocol::send_query(&mut node_1_stream).await?;
+    sleep(Duration::from_millis(100)).await;
+    let txs: Vec<Transaction> = message_protocol::send_query(&mut node_0_stream).await?;
     assert_eq!(txs.len(), 1);
 
     message_protocol::send_end(&mut node_0_stream).await?;
