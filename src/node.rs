@@ -1,4 +1,4 @@
-use tokio::{ net::{ TcpListener, TcpStream }, sync };
+use tokio::{ net::{ TcpListener, TcpStream }, sync::{ self, mpsc } };
 use futures::future::join_all;
 use std::collections::{ HashMap, HashSet };
 use std::io::Result;
@@ -18,6 +18,11 @@ pub struct PeerInfo {
     pub peer_addr: String,
 }
 
+pub enum ReplicaOutbound {
+    Broadcast(HotStuffMessage),
+    SendTo(PeerId, HotStuffMessage),
+}
+
 struct Node {
     id: PeerId,
     _is_leader: bool,
@@ -25,7 +30,6 @@ struct Node {
     seen_transactions: HashSet<[u8; 32]>,
     peers: Vec<PeerInfo>,
     peer_connections: HashMap<PeerId, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
-    pub replica: HotStuffReplica,
     replica_ids: Vec<PeerId>,
 }
 
@@ -51,10 +55,21 @@ pub async fn run_node(
             seen_transactions: HashSet::new(),
             peers: peers,
             peer_connections: peer_connections,
-            replica: HotStuffReplica::new(node_index),
             replica_ids: (0..num_validators).collect(),
         })
     );
+
+    // Sends messages to replica from node
+    let (to_replica_tx, to_replica_rx): (
+        mpsc::Sender<HotStuffMessage>,
+        mpsc::Receiver<HotStuffMessage>,
+    ) = mpsc::channel(1024);
+
+    // Recieves messages from replica to node
+    let (from_replica_tx, from_replica_rx): (
+        mpsc::Sender<ReplicaOutbound>,
+        mpsc::Receiver<ReplicaOutbound>,
+    ) = mpsc::channel(1024);
 
     tokio::spawn(run_client_listener(client_addr.to_owned(), node.clone()));
     tokio::spawn(run_peer_listener(consensus_addr.to_owned(), node.clone()));

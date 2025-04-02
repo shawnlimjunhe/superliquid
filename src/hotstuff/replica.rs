@@ -1,8 +1,9 @@
 use std::{ collections::{ HashMap, HashSet }, vec };
 
 use ed25519_dalek::{ Signer, SigningKey, VerifyingKey };
+use tokio::sync::mpsc;
 
-use crate::config;
+use crate::{ config, node::ReplicaOutbound };
 
 use super::{
     block::{ Block, BlockHash },
@@ -28,10 +29,11 @@ pub struct HotStuffReplica {
     pub messages: Vec<HotStuffMessage>,
     blockstore: HashMap<BlockHash, Block>,
     pub pacemaker: Pacemaker,
+    node_sender: mpsc::Sender<ReplicaOutbound>,
 }
 
 impl HotStuffReplica {
-    pub fn new(node_id: usize) -> Self {
+    pub fn new(node_id: usize, node_sender: mpsc::Sender<ReplicaOutbound>) -> Self {
         let signing_key = config::retrieve_signing_key(node_id);
 
         HotStuffReplica {
@@ -46,6 +48,7 @@ impl HotStuffReplica {
             messages: vec![],
             blockstore: HashMap::new(),
             pacemaker: Pacemaker::new(),
+            node_sender,
         }
     }
 
