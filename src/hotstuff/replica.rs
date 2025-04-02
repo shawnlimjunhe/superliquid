@@ -393,7 +393,19 @@ impl HotStuffReplica {
         }
     }
 
-    pub async fn run_replica(&mut self, to_replica_rx: mpsc::Receiver<HotStuffMessage>) {
+    pub fn send_new_view(self) -> HotStuffMessage {
+        HotStuffMessage {
+            message_type: HotStuffMessageType::NewView,
+            view_number: self.view_number, // this is wrong
+            node: None,
+            justify: self.prepare_qc,
+            partial_sig: None,
+        }
+    }
+
+    pub async fn run_replica(&mut self, mut to_replica_rx: mpsc::Receiver<HotStuffMessage>) {
+        while let Some(msg) = to_replica_rx.recv().await {}
+
         todo!();
     }
 }
