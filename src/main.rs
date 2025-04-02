@@ -21,7 +21,7 @@ async fn main() {
 
     let ports: Vec<u16> = (0..num_nodes).map(|i| base_port + (i as u16)).collect();
     let curr_port = ports[node_index];
-    let peer_addr = format!("{}:{}", ip, curr_port);
+    let consensus_addr = format!("{}:{}", ip, curr_port);
     let client_addr = format!("{}:{}", ip, client_port);
 
     let peers = ports
@@ -35,10 +35,12 @@ async fn main() {
         })
         .collect();
 
-    println!("{}", peer_addr);
+    println!("{}", consensus_addr);
     let _ = match args.get(1).map(|s| s.as_str()) {
-        Some("node") => { node::run_node(&client_addr, &peer_addr, peers, node_index).await }
-        Some("client") => { client::run_client(&peer_addr).await }
+        Some("node") => {
+            node::run_node(client_addr, consensus_addr, peers, node_index, num_nodes).await
+        }
+        Some("client") => { client::run_client(&consensus_addr).await }
         _ => {
             eprintln!("Usage: cargo run -- [node|client] [number]");
             Ok(())

@@ -11,11 +11,12 @@ use crate::{
 };
 use crate::{ hotstuff::replica::HotStuffReplica, node, types::Transaction };
 
+pub type PeerId = usize;
+
 pub struct PeerInfo {
     pub peer_id: usize,
     pub peer_addr: String,
 }
-pub type PeerId = String;
 
 struct Node {
     id: PeerId,
@@ -25,15 +26,17 @@ struct Node {
     peers: Vec<PeerInfo>,
     peer_connections: HashMap<PeerId, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
     pub replica: HotStuffReplica,
+    replica_ids: Vec<PeerId>,
 }
 
 /// Runs the overall node has listens on two ports, 1 to handle client side connections and
 /// another for peer connections
 pub async fn run_node(
-    client_addr: &str,
-    peer_addr: &str,
+    client_addr: String,
+    consensus_addr: String,
     peers: Vec<PeerInfo>,
-    node_index: usize
+    node_index: usize,
+    num_validators: usize
 ) -> Result<()> {
     // Bind the listener to the address
     let peer_connections: HashMap<PeerId, Arc<sync::Mutex<TcpStream>>> = connect_to_peers(
@@ -42,18 +45,19 @@ pub async fn run_node(
 
     let node = Arc::new(
         sync::Mutex::new(Node {
-            id: format!("node-{}", node_index),
+            id: node_index,
             _is_leader: true,
             transactions: vec![],
             seen_transactions: HashSet::new(),
             peers: peers,
             peer_connections: peer_connections,
             replica: HotStuffReplica::new(node_index),
+            replica_ids: (0..num_validators).collect(),
         })
     );
 
     tokio::spawn(run_client_listener(client_addr.to_owned(), node.clone()));
-    tokio::spawn(run_peer_listener(peer_addr.to_owned(), node.clone()));
+    tokio::spawn(run_peer_listener(consensus_addr.to_owned(), node.clone()));
 
     Ok(())
 }
@@ -96,17 +100,32 @@ async fn handle_client_connection(
     }
 }
 
+async fn handle_peer_connection(mut socket: TcpStream, node: Arc<sync::Mutex<Node>>) -> Result<()> {
+    loop {
+        let message = message_protocol::receive_message(&mut socket).await?;
+        if let Message::HotStuff(hot_stuff_message) = message {
+            {
+                let mut node = node.lock().await;
+                node.replica.process_message(hot_stuff_message);
+            }
+            println!("Received HotStuff message");
+        } else {
+            eprintln!("Unexpected message on peer connection: {:?}", message);
+        }
+    }
+}
+
 /// peer listener handles the consensus layer communication
-async fn run_peer_listener(peer_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
-    let peer_listener: TcpListener = TcpListener::bind(&peer_addr).await?;
-    println!("Listening to peers on {:?}", peer_addr);
+async fn run_peer_listener(concensus_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
+    let peer_listener: TcpListener = TcpListener::bind(&concensus_addr).await?;
+    println!("Listening to peers on {:?}", concensus_addr);
 
     loop {
         let (socket, _) = peer_listener.accept().await?;
         let node = node.clone();
         println!("Spawning peer listener");
         tokio::spawn(async move {
-            match handle_client_connection(socket, node).await {
+            match handle_peer_connection(socket, node).await {
                 Ok(()) => println!("Successfully handled peer connection"),
                 Err(e) => println!("Failed due to: {:?}", e),
             }
@@ -135,14 +154,7 @@ async fn _broadcast_hotstuff_message(
     Ok(())
 }
 
-/// Sends message to the leader for the current view
-async fn send_to_leader(node: &Arc<sync::Mutex<Node>>, msg: HotStuffMessage) {
-    let leader = {
-        let node = node.lock().await;
-    };
-}
-
-async fn _send_to(
+async fn send_to_node(
     node: &Arc<sync::Mutex<Node>>,
     msg: HotStuffMessage,
     peer_id: PeerId
@@ -161,6 +173,16 @@ async fn _send_to(
     }
 }
 
+/// Sends message to the leader for the current view
+async fn send_to_leader(node: &Arc<sync::Mutex<Node>>, msg: HotStuffMessage) -> Result<()> {
+    let leader = {
+        let node = node.lock().await;
+        node.replica.pacemaker.current_leader(&node.replica_ids)
+    };
+
+    send_to_node(node, msg, leader).await
+}
+
 async fn connect_to_peers(
     peers: &Vec<PeerInfo>
 ) -> Result<HashMap<PeerId, Arc<sync::Mutex<TcpStream>>>> {
@@ -170,7 +192,7 @@ async fn connect_to_peers(
         let peer_addr = &peer_info.peer_addr;
         match TcpStream::connect(peer_addr).await {
             Ok(stream) => {
-                peer_connections.insert(peer_addr.clone(), Arc::new(sync::Mutex::new(stream)));
+                peer_connections.insert(peer_info.peer_id, Arc::new(sync::Mutex::new(stream)));
             }
             Err(e) => eprintln!("Failed to connect to {}: {:?}", peer_addr, e),
         }
@@ -204,6 +226,7 @@ async fn handle_transaction(
         let node = node.lock().await;
         node.peer_connections.values().cloned().collect()
     };
+
     let mut tasks = Vec::new();
 
     println!("broadcasting tx from node {} to {} peers", id, peer_connections.len());

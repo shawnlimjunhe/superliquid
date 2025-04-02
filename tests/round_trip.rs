@@ -7,7 +7,13 @@ use tokio::{ net::TcpStream, time::{ sleep, Duration } };
 #[tokio::test]
 async fn test_transaction_round_trip() -> Result<()> {
     tokio::spawn(async {
-        run_node("127.0.0.1:9000", "127.0.0.1:8000", vec![], 0).await.unwrap();
+        run_node(
+            "127.0.0.1:9000".to_string(),
+            "127.to_string().0.0.1:8000".to_owned(),
+            vec![],
+            0,
+            1
+        ).await.unwrap();
     });
 
     // Give the node a moment to start
@@ -50,13 +56,25 @@ async fn test_transaction_broadcast() -> Result<()> {
     let node_1_peers = vec![node_1_peer_info];
 
     tokio::spawn(async {
-        run_node("127.0.0.1:2001", "127.0.0.1:3001", node_0_peers, 0).await.unwrap();
+        run_node(
+            "127.0.0.1:2001".to_string(),
+            "127.to_string().0.0.1:3001".to_string(),
+            node_0_peers,
+            0,
+            2
+        ).await.unwrap();
     });
 
     sleep(Duration::from_millis(250)).await;
 
     tokio::spawn(async {
-        run_node("127.0.0.1:2002", "127.0.0.1:3002", node_1_peers, 1).await.unwrap();
+        run_node(
+            "127.0.0.1:2002".to_string(),
+            "127.0.0.1:3002".to_string(),
+            node_1_peers,
+            1,
+            2
+        ).await.unwrap();
     });
 
     // Give the node a moment to start

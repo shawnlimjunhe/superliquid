@@ -1,4 +1,4 @@
-use std::collections::{ HashMap, HashSet };
+use std::{ collections::{ HashMap, HashSet }, vec };
 
 use ed25519_dalek::{ Signer, SigningKey, VerifyingKey };
 
@@ -25,6 +25,7 @@ pub struct HotStuffReplica {
     precommit_qc: Option<QuorumCertificate>,
     commit_qc: Option<QuorumCertificate>,
     current_proposal: Option<Block>,
+    pub messages: Vec<HotStuffMessage>,
     blockstore: HashMap<BlockHash, Block>,
     pub pacemaker: Pacemaker,
 }
@@ -42,6 +43,7 @@ impl HotStuffReplica {
             precommit_qc: None,
             commit_qc: None,
             current_proposal: None,
+            messages: vec![],
             blockstore: HashMap::new(),
             pacemaker: Pacemaker::new(),
         }
@@ -59,6 +61,10 @@ impl HotStuffReplica {
             signer_id: self.get_public_key(),
             signature,
         }
+    }
+
+    pub fn process_message(&mut self, message: HotStuffMessage) {
+        self.messages.push(message)
     }
 
     pub fn vote_message(
