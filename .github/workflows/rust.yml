@@ -16,6 +16,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Check if .env file exists
+      run: |
+          if [ -f .env ]; then
+            echo ".env file exists"
+          else
+            echo "${{secrets.ENV_FILE}}" > .env
+            echo "created .env file"
+          fi
+    - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
     - name: Run tests
