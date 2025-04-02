@@ -1,4 +1,7 @@
-use superliquid::{ client, config, node::{ self, PeerInfo } };
+use superliquid::{
+    client, config,
+    node::{self, PeerInfo},
+};
 
 use std::env;
 
@@ -37,10 +40,8 @@ async fn main() {
 
     println!("{}", consensus_addr);
     let _ = match args.get(1).map(|s| s.as_str()) {
-        Some("node") => {
-            node::run_node(client_addr, consensus_addr, peers, node_index, num_nodes).await
-        }
-        Some("client") => { client::run_client(&consensus_addr).await }
+        Some("node") => node::run_node(client_addr, consensus_addr, peers, node_index).await,
+        Some("client") => client::run_client(&consensus_addr).await,
         _ => {
             eprintln!("Usage: cargo run -- [node|client] [number]");
             Ok(())

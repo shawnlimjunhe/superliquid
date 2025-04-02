@@ -1,8 +1,15 @@
-use superliquid::{ message_protocol, node::{ run_node, PeerInfo }, types::Transaction };
+use superliquid::{
+    message_protocol,
+    node::{PeerInfo, run_node},
+    types::Transaction,
+};
 
 use std::io::Result;
 
-use tokio::{ net::TcpStream, time::{ sleep, Duration } };
+use tokio::{
+    net::TcpStream,
+    time::{Duration, sleep},
+};
 
 #[tokio::test]
 async fn test_transaction_round_trip() -> Result<()> {
@@ -12,8 +19,9 @@ async fn test_transaction_round_trip() -> Result<()> {
             "127.to_string().0.0.1:8000".to_owned(),
             vec![],
             0,
-            1
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
     });
 
     // Give the node a moment to start
@@ -61,8 +69,9 @@ async fn test_transaction_broadcast() -> Result<()> {
             "127.to_string().0.0.1:3001".to_string(),
             node_0_peers,
             0,
-            2
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
     });
 
     sleep(Duration::from_millis(250)).await;
@@ -73,8 +82,9 @@ async fn test_transaction_broadcast() -> Result<()> {
             "127.0.0.1:3002".to_string(),
             node_1_peers,
             1,
-            2
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
     });
 
     // Give the node a moment to start
