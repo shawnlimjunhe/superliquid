@@ -11,24 +11,32 @@ use crate::{
 };
 use crate::{ hotstuff::replica::HotStuffReplica, node, types::Transaction };
 
+pub struct PeerInfo {
+    pub peer_id: usize,
+    pub peer_addr: String,
+}
+pub type PeerId = String;
+
 struct Node {
-    id: String,
+    id: PeerId,
     _is_leader: bool,
     transactions: Vec<Transaction>,
     seen_transactions: HashSet<[u8; 32]>,
-    peers: Vec<String>,
-    peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
+    peers: Vec<PeerInfo>,
+    peer_connections: HashMap<PeerId, Arc<sync::Mutex<TcpStream>>>, // For now, we skip peer discovery
     pub replica: HotStuffReplica,
 }
 
+/// Runs the overall node has listens on two ports, 1 to handle client side connections and
+/// another for peer connections
 pub async fn run_node(
     client_addr: &str,
     peer_addr: &str,
-    peers: Vec<String>,
+    peers: Vec<PeerInfo>,
     node_index: usize
 ) -> Result<()> {
     // Bind the listener to the address
-    let peer_connections: HashMap<String, Arc<sync::Mutex<TcpStream>>> = connect_to_peers(
+    let peer_connections: HashMap<PeerId, Arc<sync::Mutex<TcpStream>>> = connect_to_peers(
         &peers
     ).await?;
 
@@ -50,22 +58,7 @@ pub async fn run_node(
     Ok(())
 }
 
-async fn run_peer_listener(peer_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
-    let peer_listener: TcpListener = TcpListener::bind(&peer_addr).await?;
-    println!("Listening to peers on {:?}", peer_addr);
-
-    loop {
-        let (socket, _) = peer_listener.accept().await?;
-        let node = node.clone();
-        tokio::spawn(async move {
-            match handle_connection(socket, node).await {
-                Ok(()) => println!("Success"),
-                Err(e) => println!("Failed due to: {:?}", e),
-            }
-        });
-    }
-}
-
+/// client listener handles the application level communication
 async fn run_client_listener(client_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
     let client_listener: TcpListener = TcpListener::bind(&client_addr).await?;
     println!("Listening to client on {:?}", client_addr);
@@ -74,15 +67,18 @@ async fn run_client_listener(client_addr: String, node: Arc<sync::Mutex<Node>>) 
         let (socket, _) = client_listener.accept().await?;
         let node = node.clone();
         tokio::spawn(async move {
-            match handle_connection(socket, node).await {
-                Ok(()) => println!("Success"),
+            match handle_client_connection(socket, node).await {
+                Ok(()) => println!("Successfully handled client connection"),
                 Err(e) => println!("Failed due to: {:?}", e),
             }
         });
     }
 }
 
-async fn handle_connection(mut socket: TcpStream, node: Arc<sync::Mutex<Node>>) -> Result<()> {
+async fn handle_client_connection(
+    mut socket: TcpStream,
+    node: Arc<sync::Mutex<Node>>
+) -> Result<()> {
     loop {
         let message = message_protocol::receive_message(&mut socket).await?;
         match message {
@@ -100,9 +96,31 @@ async fn handle_connection(mut socket: TcpStream, node: Arc<sync::Mutex<Node>>) 
     }
 }
 
-async fn broadcast_hotstuff_message(node: &Arc<Mutex<Node>>, msg: HotStuffMessage) -> Result<()> {
+/// peer listener handles the consensus layer communication
+async fn run_peer_listener(peer_addr: String, node: Arc<sync::Mutex<Node>>) -> Result<()> {
+    let peer_listener: TcpListener = TcpListener::bind(&peer_addr).await?;
+    println!("Listening to peers on {:?}", peer_addr);
+
+    loop {
+        let (socket, _) = peer_listener.accept().await?;
+        let node = node.clone();
+        println!("Spawning peer listener");
+        tokio::spawn(async move {
+            match handle_client_connection(socket, node).await {
+                Ok(()) => println!("Successfully handled peer connection"),
+                Err(e) => println!("Failed due to: {:?}", e),
+            }
+        });
+    }
+}
+
+/// Broadcast msg to all peer connections
+async fn _broadcast_hotstuff_message(
+    node: &Arc<sync::Mutex<Node>>,
+    msg: HotStuffMessage
+) -> Result<()> {
     let peer_connections: Vec<Arc<sync::Mutex<TcpStream>>> = {
-        let node = node.lock().expect("Lock failed");
+        let node = node.lock().await;
         node.peer_connections.values().cloned().collect()
     };
 
@@ -117,29 +135,52 @@ async fn broadcast_hotstuff_message(node: &Arc<Mutex<Node>>, msg: HotStuffMessag
     Ok(())
 }
 
-async fn send_to(mut socket: &mut TcpStream, msg: HotStuffMessage, peer_id: usize) {
-    todo!()
+/// Sends message to the leader for the current view
+async fn send_to_leader(node: &Arc<sync::Mutex<Node>>, msg: HotStuffMessage) {
+    let leader = {
+        let node = node.lock().await;
+    };
+}
+
+async fn _send_to(
+    node: &Arc<sync::Mutex<Node>>,
+    msg: HotStuffMessage,
+    peer_id: PeerId
+) -> Result<()> {
+    let peer_connection = {
+        let node = node.lock().await;
+        node.peer_connections.get(&peer_id).cloned()
+    };
+
+    let Some(peer_connection) = peer_connection else {
+        return Ok(());
+    };
+    {
+        let mut peer_connection = peer_connection.lock().await;
+        send_message(&mut peer_connection, &Message::HotStuff(msg)).await
+    }
 }
 
 async fn connect_to_peers(
-    peers: &Vec<String>
-) -> Result<HashMap<String, Arc<sync::Mutex<TcpStream>>>> {
+    peers: &Vec<PeerInfo>
+) -> Result<HashMap<PeerId, Arc<sync::Mutex<TcpStream>>>> {
     let mut peer_connections = HashMap::new();
 
-    for peer_addr in peers.iter() {
+    for peer_info in peers.iter() {
+        let peer_addr = &peer_info.peer_addr;
         match TcpStream::connect(peer_addr).await {
             Ok(stream) => {
-                let peer_add = &stream.peer_addr().unwrap().clone();
-                let local_addr = &stream.local_addr().unwrap().clone();
-
                 peer_connections.insert(peer_addr.clone(), Arc::new(sync::Mutex::new(stream)));
-                println!("Connected to peer at: {:?} from: {:?}", peer_add, local_addr);
             }
-            Err(e) => {
-                eprintln!("Failed to connect to {}: {:?}", peer_addr, e);
-            }
+            Err(e) => eprintln!("Failed to connect to {}: {:?}", peer_addr, e),
         }
     }
+
+    println!(
+        "Established connection to {:?} peers out of {:?}",
+        peer_connections.len(),
+        peers.len()
+    );
     Ok(peer_connections)
 }
 

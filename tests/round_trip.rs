@@ -1,4 +1,4 @@
-use superliquid::{ node::run_node, types::Transaction, message_protocol };
+use superliquid::{ message_protocol, node::{ run_node, PeerInfo }, types::Transaction };
 
 use std::io::Result;
 
@@ -36,24 +36,27 @@ async fn test_transaction_round_trip() -> Result<()> {
 
 #[tokio::test]
 async fn test_transaction_broadcast() -> Result<()> {
+    let node_0_peer_info = PeerInfo {
+        peer_id: 1,
+        peer_addr: "127.0.0.1:3002".to_string(),
+    };
+
+    let node_1_peer_info = PeerInfo {
+        peer_id: 0,
+        peer_addr: "127.0.0.1:3001".to_string(),
+    };
+
+    let node_0_peers = vec![node_0_peer_info];
+    let node_1_peers = vec![node_1_peer_info];
+
     tokio::spawn(async {
-        run_node(
-            "127.0.0.1:2001",
-            "127.0.0.1:3001",
-            vec!["127.0.0.1:3002".to_string()],
-            0
-        ).await.unwrap();
+        run_node("127.0.0.1:2001", "127.0.0.1:3001", node_0_peers, 0).await.unwrap();
     });
 
     sleep(Duration::from_millis(250)).await;
 
     tokio::spawn(async {
-        run_node(
-            "127.0.0.1:2002",
-            "127.0.0.1:3002",
-            vec!["127.0.0.1:3001".to_string()],
-            1
-        ).await.unwrap();
+        run_node("127.0.0.1:2002", "127.0.0.1:3002", node_1_peers, 1).await.unwrap();
     });
 
     // Give the node a moment to start

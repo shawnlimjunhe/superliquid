@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::{ Duration, Instant };
 
-use super::config;
+use crate::config;
 
 use super::replica::ViewNumber;
 

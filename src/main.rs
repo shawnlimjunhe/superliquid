@@ -1,4 +1,4 @@
-use superliquid::*;
+use superliquid::{ client, config, node::{ self, PeerInfo } };
 
 use std::env;
 
@@ -8,7 +8,7 @@ async fn main() {
     let ip = "127.0.0.1";
     let base_port = 6400;
     let client_port = 8000;
-    let num_nodes = 4;
+    let num_nodes = config::retrieve_num_validators();
 
     let node_index = args
         .get(2)
@@ -28,7 +28,11 @@ async fn main() {
         .iter()
         .enumerate()
         .filter(|(i, _)| *i != node_index)
-        .map(|(_, port)| format!("{}:{}", ip, port))
+        .map(|(i, port)| (i, format!("{}:{}", ip, port)))
+        .map(|(i, addr)| PeerInfo {
+            peer_id: i,
+            peer_addr: addr,
+        })
         .collect();
 
     println!("{}", peer_addr);

@@ -4,3 +4,4 @@ pub mod types;
 pub mod message_protocol;
 pub mod network;
 pub mod hotstuff;
+pub mod config;
