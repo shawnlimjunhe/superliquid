@@ -2,12 +2,14 @@ use std::time::{ Duration, Instant };
 
 use crate::config;
 
-use super::replica::ViewNumber;
+use super::{ block::Block, crypto::QuorumCertificate, replica::ViewNumber };
 
 pub struct Pacemaker {
     pub curr_view: ViewNumber,
     pub timeout: Duration,
     pub last_view_change: Instant,
+    pub highest_qc: Option<QuorumCertificate>,
+    pub leaf: Option<Block>,
 }
 
 impl Pacemaker {
@@ -16,6 +18,8 @@ impl Pacemaker {
             curr_view: 0,
             timeout: config::retrieve_tick_duration(),
             last_view_change: Instant::now(),
+            highest_qc: None,
+            leaf: None,
         }
     }
 

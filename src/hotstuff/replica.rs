@@ -30,6 +30,11 @@ pub struct HotStuffReplica {
     blockstore: HashMap<BlockHash, Block>,
     pub pacemaker: Pacemaker,
 
+    pub v_height: u128,
+    pub locked_node: Option<Block>,
+    pub last_exec_node: Option<Block>,
+    genesis: Option<Block>,
+
     node_sender: mpsc::Sender<ReplicaOutbound>,
 }
 
@@ -50,6 +55,11 @@ impl HotStuffReplica {
             blockstore: HashMap::new(),
             pacemaker: Pacemaker::new(),
             node_sender,
+
+            v_height: 0,
+            locked_node: None,
+            last_exec_node: None,
+            genesis: None,
         }
     }
 
