@@ -1,7 +1,4 @@
-use superliquid::{
-    client, config,
-    node::{self, PeerInfo},
-};
+use superliquid::{ client, config, node::{ self, PeerInfo } };
 
 use std::env;
 

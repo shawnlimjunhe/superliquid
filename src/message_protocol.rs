@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use tokio::net::TcpStream;
 
 use crate::hotstuff::message::HotStuffMessage;
 use crate::types::Transaction;
-use crate::{network, types::Message};
-use std::io::{Error, ErrorKind, Result};
+use crate::{ network, types::Message };
+use std::io::{ Error, ErrorKind, Result };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum AppMessage {
@@ -27,7 +27,7 @@ pub async fn send_message(stream: &mut TcpStream, message: &Message) -> Result<(
 
 pub async fn send_hotstuff_message(
     stream: &mut TcpStream,
-    message: &HotStuffMessage,
+    message: &HotStuffMessage
 ) -> Result<()> {
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
@@ -40,10 +40,8 @@ pub async fn send_transaction(stream: &mut TcpStream, tx: Transaction) -> Result
 
     match receive_message(stream).await? {
         Message::Application(AppMessage::Ack) => Ok(()), // basic ACK
-        other => Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Expected Response, got {:?}", other),
-        )),
+        other =>
+            Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
     }
 }
 
@@ -53,10 +51,8 @@ pub async fn send_query(stream: &mut TcpStream) -> Result<Vec<Transaction>> {
 
     match receive_message(stream).await? {
         Message::Application(AppMessage::Response(txs)) => Ok(txs), // basic ACK
-        other => Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Expected Response, got {:?}", other),
-        )),
+        other =>
+            Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
     }
 }
 
@@ -73,7 +69,7 @@ pub async fn send_ack(stream: &mut TcpStream) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::net::{ TcpListener, TcpStream };
 
     fn make_transaction() -> Transaction {
         Transaction {
@@ -118,10 +114,8 @@ mod tests {
                     let txs = vec![make_transaction()];
                     send_message(
                         &mut socket,
-                        &&Message::Application(AppMessage::Response(txs)),
-                    )
-                    .await
-                    .unwrap();
+                        &&Message::Application(AppMessage::Response(txs))
+                    ).await.unwrap();
                 }
                 _ => panic!("Expected Query"),
             }

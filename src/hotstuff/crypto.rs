@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use crate::types::Sha256Hash;
 use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 use super::{
     block::BlockHash,
     hexstring,
-    message::{HotStuffMessage, HotStuffMessageType},
+    message::{ HotStuffMessage, HotStuffMessageType },
     replica::ViewNumber,
 };
 
@@ -58,7 +58,10 @@ impl QuorumCertificate {
         let view_number = first_vote.view_number;
         let message_type = first_vote.message_type.clone();
 
-        let sigs = votes.iter().filter_map(|v| v.partial_sig.clone()).collect();
+        let sigs = votes
+            .iter()
+            .filter_map(|v| v.partial_sig.clone())
+            .collect();
 
         Some(QuorumCertificate {
             message_type,
@@ -115,17 +118,12 @@ mod tests {
         let json = serde_json::to_string(&partialsig).expect("Failed to serialize signature");
 
         // Deserialize
-        let deserialized: PartialSig =
-            serde_json::from_str(&json).expect("Failed to deserialize signature");
+        let deserialized: PartialSig = serde_json
+            ::from_str(&json)
+            .expect("Failed to deserialize signature");
 
-        assert_eq!(
-            partialsig.signature.to_bytes(),
-            deserialized.signature.to_bytes()
-        );
+        assert_eq!(partialsig.signature.to_bytes(), deserialized.signature.to_bytes());
 
-        assert_eq!(
-            partialsig.signer_id.to_bytes(),
-            deserialized.signer_id.to_bytes()
-        );
+        assert_eq!(partialsig.signer_id.to_bytes(), deserialized.signer_id.to_bytes());
     }
 }

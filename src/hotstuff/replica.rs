@@ -1,18 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet},
-    vec,
-};
+use std::{ collections::{ HashMap, HashSet }, vec };
 
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{ Signer, SigningKey, VerifyingKey };
 use tokio::sync::mpsc;
 
-use crate::{config, node::ReplicaOutbound};
+use crate::{ config, node::ReplicaOutbound };
 
 use super::{
-    block::{Block, BlockHash},
+    block::{ Block, BlockHash },
     client_command::ClientCommand,
-    crypto::{PartialSig, QuorumCertificate},
-    message::{HotStuffMessage, HotStuffMessageType},
+    crypto::{ PartialSig, QuorumCertificate },
+    message::{ HotStuffMessage, HotStuffMessageType },
     pacemaker::Pacemaker,
 };
 
@@ -79,7 +76,7 @@ impl HotStuffReplica {
         message_type: HotStuffMessageType,
         node: Block,
         qc: QuorumCertificate,
-        curr_view: ViewNumber,
+        curr_view: ViewNumber
     ) -> HotStuffMessage {
         let mut message = HotStuffMessage::new(message_type, Some(node), Some(qc), curr_view);
         message.partial_sig = Some(self.sign(&message));
@@ -89,7 +86,7 @@ impl HotStuffReplica {
     pub fn matching_message(
         message: HotStuffMessage,
         message_type: HotStuffMessageType,
-        view_number: ViewNumber,
+        view_number: ViewNumber
     ) -> bool {
         message_type == message.message_type && view_number == message.view_number
     }
@@ -97,7 +94,7 @@ impl HotStuffReplica {
     pub fn matching_qc(
         qc: &QuorumCertificate,
         message_type: HotStuffMessageType,
-        view_number: ViewNumber,
+        view_number: ViewNumber
     ) -> bool {
         qc.message_type == message_type && qc.view_number == view_number
     }
@@ -148,7 +145,7 @@ impl HotStuffReplica {
 
     fn validate_vote_signatures<'a>(
         &self,
-        votes: &'a Vec<HotStuffMessage>,
+        votes: &'a Vec<HotStuffMessage>
     ) -> Vec<&'a HotStuffMessage> {
         let mut validated_votes = vec![];
 
@@ -159,16 +156,12 @@ impl HotStuffReplica {
             if let Some(partial_sig) = &vote.partial_sig {
                 let verifying_key = &partial_sig.signer_id;
 
-                if !validator_set.contains(verifying_key) || !seen_validators.insert(verifying_key)
-                {
+                if !validator_set.contains(verifying_key) || !seen_validators.insert(verifying_key) {
                     // reject if not part of validator set or validator already voted
                     continue;
                 }
 
-                if verifying_key
-                    .verify_strict(&vote.hash(), &partial_sig.signature)
-                    .is_ok()
-                {
+                if verifying_key.verify_strict(&vote.hash(), &partial_sig.signature).is_ok() {
                     validated_votes.push(vote);
                 }
             }
@@ -225,18 +218,20 @@ impl HotStuffReplica {
 
     pub fn get_highest_qc_from_votes<'a>(
         &self,
-        votes: &'a Vec<HotStuffMessage>,
+        votes: &'a Vec<HotStuffMessage>
     ) -> Option<&'a QuorumCertificate> {
         votes
             .iter()
-            .filter_map(|msg| match msg.message_type {
-                HotStuffMessageType::NewView => {
-                    if msg.view_number == self.view_number - 1 {
-                        return msg.justify.as_ref();
+            .filter_map(|msg| {
+                match msg.message_type {
+                    HotStuffMessageType::NewView => {
+                        if msg.view_number == self.view_number - 1 {
+                            return msg.justify.as_ref();
+                        }
+                        None
                     }
-                    None
+                    _ => None,
                 }
-                _ => None,
             })
             .max_by_key(|qc| qc.view_number)
     }
@@ -245,7 +240,7 @@ impl HotStuffReplica {
     pub fn leader_prepare(
         &mut self,
         votes: &Vec<HotStuffMessage>,
-        cmd: ClientCommand,
+        cmd: ClientCommand
     ) -> Option<HotStuffMessage> {
         let Some(high_qc) = self.get_highest_qc_from_votes(votes) else {
             // no valid QC from previous view
@@ -260,12 +255,14 @@ impl HotStuffReplica {
         let new_block = Block::create_leaf(parent, cmd, self.view_number);
         self.blockstore.insert(new_block.hash(), new_block.clone());
 
-        return Some(HotStuffMessage::new(
-            HotStuffMessageType::Prepare,
-            Some(new_block),
-            Some(high_qc.clone()),
-            self.view_number,
-        ));
+        return Some(
+            HotStuffMessage::new(
+                HotStuffMessageType::Prepare,
+                Some(new_block),
+                Some(high_qc.clone()),
+                self.view_number
+            )
+        );
     }
 
     pub fn replica_prepare(&self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
@@ -282,12 +279,14 @@ impl HotStuffReplica {
         }
 
         if self.safe_node(block, msg_justify_qc) {
-            return Some(HotStuffMessage::new(
-                HotStuffMessageType::Prepare,
-                msg.node.clone(),
-                None,
-                self.view_number,
-            ));
+            return Some(
+                HotStuffMessage::new(
+                    HotStuffMessageType::Prepare,
+                    msg.node.clone(),
+                    None,
+                    self.view_number
+                )
+            );
         }
         None
     }
@@ -299,12 +298,9 @@ impl HotStuffReplica {
         };
 
         self.prepare_qc = Some(qc.clone());
-        return Some(HotStuffMessage::new(
-            HotStuffMessageType::PreCommit,
-            None,
-            Some(qc),
-            self.view_number,
-        ));
+        return Some(
+            HotStuffMessage::new(HotStuffMessageType::PreCommit, None, Some(qc), self.view_number)
+        );
     }
 
     pub fn replica_precommit(&mut self, msg: &HotStuffMessage) -> Option<HotStuffMessage> {
@@ -318,12 +314,14 @@ impl HotStuffReplica {
             let Some(node) = self.blockstore.get(&qc.block_hash) else {
                 return None;
             };
-            return Some(HotStuffMessage::new(
-                HotStuffMessageType::PreCommit,
-                Some(node.clone()),
-                None,
-                self.view_number,
-            ));
+            return Some(
+                HotStuffMessage::new(
+                    HotStuffMessageType::PreCommit,
+                    Some(node.clone()),
+                    None,
+                    self.view_number
+                )
+            );
         }
         None
     }
@@ -334,12 +332,9 @@ impl HotStuffReplica {
         };
 
         self.precommit_qc = Some(qc.clone());
-        return Some(HotStuffMessage::new(
-            HotStuffMessageType::Commit,
-            None,
-            Some(qc),
-            self.view_number,
-        ));
+        return Some(
+            HotStuffMessage::new(HotStuffMessageType::Commit, None, Some(qc), self.view_number)
+        );
     }
 
     pub fn replica_commit(&mut self, msg: &HotStuffMessage) -> Option<HotStuffMessage> {
@@ -353,12 +348,14 @@ impl HotStuffReplica {
             let Some(node) = self.blockstore.get(&qc.block_hash) else {
                 return None;
             };
-            return Some(HotStuffMessage::new(
-                HotStuffMessageType::Commit,
-                Some(node.clone()),
-                None,
-                self.view_number,
-            ));
+            return Some(
+                HotStuffMessage::new(
+                    HotStuffMessageType::Commit,
+                    Some(node.clone()),
+                    None,
+                    self.view_number
+                )
+            );
         }
         None
     }
@@ -372,12 +369,9 @@ impl HotStuffReplica {
         self.commit_qc = Some(qc.clone());
 
         // do commit here
-        return Some(HotStuffMessage::new(
-            HotStuffMessageType::Decide,
-            None,
-            Some(qc),
-            self.view_number,
-        ));
+        return Some(
+            HotStuffMessage::new(HotStuffMessageType::Decide, None, Some(qc), self.view_number)
+        );
     }
 
     pub fn replica_decide(&mut self, msg: &HotStuffMessage) {
@@ -386,8 +380,9 @@ impl HotStuffReplica {
             return;
         };
 
-        if qc.verify(&self.validator_set, self.quorum_threshold())
-            && Self::matching_qc(&qc, HotStuffMessageType::Commit, self.view_number)
+        if
+            qc.verify(&self.validator_set, self.quorum_threshold()) &&
+            Self::matching_qc(&qc, HotStuffMessageType::Commit, self.view_number)
         {
             // execute commands in qc.node here
         }

@@ -1,5 +1,5 @@
-use crate::types::{Sha256Hash, Transaction};
-use serde::{Deserialize, Serialize};
+use crate::types::{ Sha256Hash, Transaction };
+use serde::{ Deserialize, Serialize };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ClientCommand {
