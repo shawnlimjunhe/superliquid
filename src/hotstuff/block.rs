@@ -1,10 +1,16 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, vec};
 
-use crate::{ hotstuff::client_command::ClientCommand, types::Sha256Hash };
-use serde::{ Deserialize, Serialize };
-use sha2::{ Digest, Sha256 };
+use crate::{
+    hotstuff::client_command::ClientCommand,
+    types::{Sha256Hash, Transaction},
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use super::{ crypto::QuorumCertificate, replica::ViewNumber };
+use super::{
+    crypto::{self, QuorumCertificate},
+    replica::ViewNumber,
+};
 
 pub type BlockHash = Sha256Hash;
 
@@ -12,6 +18,8 @@ pub type BlockHash = Sha256Hash;
 pub enum Block {
     Genesis {
         cmd: ClientCommand,
+        view_number: ViewNumber,
+        justify: QuorumCertificate,
     },
     Normal {
         parent_id: BlockHash,
@@ -41,7 +49,7 @@ impl Block {
     pub fn extends_from(
         &self,
         locked_block_hash: BlockHash,
-        block_store: &HashMap<BlockHash, Block>
+        block_store: &HashMap<BlockHash, Block>,
     ) -> bool {
         let mut current = self;
 
@@ -70,7 +78,12 @@ impl Block {
     pub fn hash(&self) -> BlockHash {
         match self {
             Self::Genesis { .. } => Sha256::digest(b"GENESIS").into(),
-            Self::Normal { parent_id, cmd, view_number, .. } => {
+            Self::Normal {
+                parent_id,
+                cmd,
+                view_number,
+                ..
+            } => {
                 let hashable = HashableBlock {
                     parent_id: *parent_id,
                     cmd_hash: cmd.hash(),
@@ -80,6 +93,16 @@ impl Block {
                 let encoded = bincode::serialize(&hashable).unwrap();
                 Sha256::digest(&encoded).into()
             }
+        }
+    }
+
+    pub fn create_genesis_block() -> Block {
+        let qc = crypto::QuorumCertificate::create_genesis_qc();
+
+        Block::Genesis {
+            cmd: ClientCommand::create_empty_command(),
+            view_number: 0,
+            justify: qc,
         }
     }
 }

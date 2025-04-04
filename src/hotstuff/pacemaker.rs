@@ -1,25 +1,32 @@
-use std::time::{ Duration, Instant };
+use std::time::{Duration, Instant};
 
 use crate::config;
 
-use super::{ block::Block, crypto::QuorumCertificate, replica::ViewNumber };
+use super::{block::Block, crypto::QuorumCertificate, replica::ViewNumber};
 
 pub struct Pacemaker {
     pub curr_view: ViewNumber,
     pub timeout: Duration,
     pub last_view_change: Instant,
-    pub highest_qc: Option<QuorumCertificate>,
-    pub leaf: Option<Block>,
+    pub highest_qc: QuorumCertificate,
+    pub leaf: Block,
 }
 
 impl Pacemaker {
     pub fn new() -> Self {
+        let genesis_block = Block::create_genesis_block();
+
+        let justify = match &genesis_block {
+            Block::Genesis { justify, .. } => justify.clone(),
+            _ => panic!("Expected Genesis block, got something else"),
+        };
+
         Self {
             curr_view: 0,
             timeout: config::retrieve_tick_duration(),
             last_view_change: Instant::now(),
-            highest_qc: None,
-            leaf: None,
+            highest_qc: justify,
+            leaf: genesis_block,
         }
     }
 
