@@ -16,12 +16,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up .env and export vars to GITHUB_ENV
+    - name: Set up .env
       run: |
-        echo "${{ secrets.ENV_FILE }}" > .env
-        while IFS= read -r line; do
-          echo "$line" >> $GITHUB_ENV
-        done < .env
+        echo "TICK_DURATION=${{ secrets.TICK_DURATION }}" >> .env
+        echo "NUM_VALIDATORS=${{ secrets.NUM_VALIDATORS }}" >> .env
+    
+        echo "PUBLIC_KEY_0=${{ secrets.PUBLIC_KEY_0 }}" >> .env
+        echo "SECRET_KEY_0=${{ secrets.SECRET_KEY_0 }}" >> .env
+        echo "PUBLIC_KEY_1=${{ secrets.PUBLIC_KEY_1 }}" >> .env
+        echo "SECRET_KEY_1=${{ secrets.SECRET_KEY_1 }}" >> .env
+        echo "PUBLIC_KEY_2=${{ secrets.PUBLIC_KEY_2 }}" >> .env
+        echo "SECRET_KEY_2=${{ secrets.SECRET_KEY_2 }}" >> .env
+        echo "PUBLIC_KEY_3=${{ secrets.PUBLIC_KEY_3 }}" >> .env
+        echo "SECRET_KEY_3=${{ secrets.SECRET_KEY_3 }}" >> .env
+
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
