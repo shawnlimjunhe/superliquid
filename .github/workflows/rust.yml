@@ -18,17 +18,18 @@ jobs:
     - uses: actions/checkout@v4
     - name: Set up .env
       run: |
-        echo "TICK_DURATION=${{ secrets.TICK_DURATION }}" >> .env
-        echo "NUM_VALIDATORS=${{ secrets.NUM_VALIDATORS }}" >> .env
-    
-        echo "PUBLIC_KEY_0=${{ secrets.PUBLIC_KEY_0 }}" >> .env
-        echo "SECRET_KEY_0=${{ secrets.SECRET_KEY_0 }}" >> .env
-        echo "PUBLIC_KEY_1=${{ secrets.PUBLIC_KEY_1 }}" >> .env
-        echo "SECRET_KEY_1=${{ secrets.SECRET_KEY_1 }}" >> .env
-        echo "PUBLIC_KEY_2=${{ secrets.PUBLIC_KEY_2 }}" >> .env
-        echo "SECRET_KEY_2=${{ secrets.SECRET_KEY_2 }}" >> .env
-        echo "PUBLIC_KEY_3=${{ secrets.PUBLIC_KEY_3 }}" >> .env
-        echo "SECRET_KEY_3=${{ secrets.SECRET_KEY_3 }}" >> .env
+        {
+          echo "TICK_DURATION=${{ secrets.TICK_DURATION }}" 
+          echo "NUM_VALIDATORS=${{ secrets.NUM_VALIDATORS }}" 
+          echo "PUBLIC_KEY_0=${{ secrets.PUBLIC_KEY_0 }}" 
+          echo "SECRET_KEY_0=${{ secrets.SECRET_KEY_0 }}" 
+          echo "PUBLIC_KEY_1=${{ secrets.PUBLIC_KEY_1 }}" 
+          echo "SECRET_KEY_1=${{ secrets.SECRET_KEY_1 }}" 
+          echo "PUBLIC_KEY_2=${{ secrets.PUBLIC_KEY_2 }}" 
+          echo "SECRET_KEY_2=${{ secrets.SECRET_KEY_2 }}" 
+          echo "PUBLIC_KEY_3=${{ secrets.PUBLIC_KEY_3 }}" 
+          echo "SECRET_KEY_3=${{ secrets.SECRET_KEY_3 }}" 
+        } | tee -a .env >> $GITHUB_ENV
 
     - uses: actions/checkout@v4
     - name: Build
