@@ -1,9 +1,6 @@
-use std::{collections::HashMap, vec};
+use std::collections::HashMap;
 
-use crate::{
-    hotstuff::client_command::ClientCommand,
-    types::{Sha256Hash, Transaction},
-};
+use crate::{hotstuff::client_command::ClientCommand, types::Sha256Hash};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

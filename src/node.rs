@@ -13,7 +13,7 @@ use crate::{
     message_protocol::{self, AppMessage, send_message, send_transaction},
     types::Message,
 };
-use crate::{hotstuff::replica::HotStuffReplica, node, types::Transaction};
+use crate::{hotstuff::replica::HotStuffReplica, types::Transaction};
 
 pub type PeerId = usize;
 

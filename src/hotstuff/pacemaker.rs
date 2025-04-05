@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::config;
 
-use super::replica::{self, ViewNumber};
+use super::replica::ViewNumber;
 
 pub struct Pacemaker {
     pub curr_view: ViewNumber,

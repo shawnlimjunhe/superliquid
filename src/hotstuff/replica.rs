@@ -1,11 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    error::Error,
-    vec,
-};
+use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-use rand_core::le;
 use tokio::{
     pin,
     sync::mpsc::{self, error::SendError},
