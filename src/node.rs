@@ -304,7 +304,7 @@ async fn broadcast_transaction(node: &Arc<Mutex<Node>>, tx: Transaction) -> Resu
 }
 
 async fn handle_transaction(
-    mut socket: &mut TcpStream,
+    socket: &mut TcpStream,
     node: &Arc<Mutex<Node>>,
     tx: Transaction,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
@@ -330,7 +330,6 @@ async fn handle_transaction(
         socket.local_addr()
     );
 
-    message_protocol::send_ack(&mut socket).await?;
     broadcast_transaction(node, tx.clone()).await?;
     to_replica_tx
         .send(ReplicaInBound::Transaction(tx))

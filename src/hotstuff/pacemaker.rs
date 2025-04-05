@@ -57,6 +57,10 @@ impl Pacemaker {
         self.replica_ids[(self.curr_view as usize) % self.replica_ids.len()]
     }
 
+    pub(crate) fn reset_timer(&mut self) {
+        self.last_view_change = Instant::now();
+    }
+
     pub(crate) fn time_remaining(&self) -> Duration {
         let end_time = self.last_view_change + self.timeout;
         end_time.saturating_duration_since(Instant::now())
@@ -129,5 +133,18 @@ mod tests {
         sleep(std::time::Duration::from_millis(10));
         let t2 = pacemaker.time_remaining();
         assert!(t2 < t1);
+    }
+
+    #[test]
+    fn test_should_advance_view() {
+        let mut pacemaker = Pacemaker::new();
+        pacemaker.timeout = Duration::from_millis(50);
+
+        // Should not advance immediately
+        assert!(!pacemaker.should_advance_view());
+
+        // Wait past the timeout
+        sleep(Duration::from_millis(60));
+        assert!(pacemaker.should_advance_view());
     }
 }

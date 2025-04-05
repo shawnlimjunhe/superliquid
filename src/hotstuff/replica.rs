@@ -536,6 +536,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.pacemaker.reset_timer();
         self.handle_message(
             msg,
             |s, m| s.leader_prepare(),
@@ -548,6 +549,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.pacemaker.reset_timer();
         self.handle_message(
             msg,
             |s, _| s.leader_precommit(),
@@ -560,6 +562,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.pacemaker.reset_timer();
         self.handle_message(msg, |s, _| s.leader_commit(), |s, m| s.replica_commit(&m))
             .await
     }
@@ -568,6 +571,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.pacemaker.reset_timer();
         self.handle_message(msg, |s, _| s.leader_decide(), |s, m| s.replica_decide(&m))
             .await
     }
@@ -576,7 +580,6 @@ impl HotStuffReplica {
         &mut self,
         inbound_msg: ReplicaInBound,
     ) -> Result<(), SendError<ReplicaOutbound>> {
-        replica_log!(self.node_id, "Handle Hotstuff Inbound");
         match inbound_msg {
             ReplicaInBound::HotStuff(hotstuff_msg) => match hotstuff_msg.message_type {
                 HotStuffMessageType::NewView => self.handle_new_view(hotstuff_msg).await,
@@ -586,6 +589,7 @@ impl HotStuffReplica {
                 _ => Ok(()),
             },
             ReplicaInBound::Transaction(tx) => {
+                replica_log!(self.node_id, "Handle Transaction inbound to replica");
                 self.mempool.push(tx);
                 Ok(())
             }
