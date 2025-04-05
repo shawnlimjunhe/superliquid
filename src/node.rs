@@ -27,6 +27,15 @@ pub enum ReplicaOutbound {
     SendTo(PeerId, HotStuffMessage),
 }
 
+pub enum ReplicaInBound {
+    HotStuff(HotStuffMessage),
+    Transaction(Transaction),
+}
+
+fn mpsc_error<E: std::fmt::Display>(context: &str, err: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, format!("{}: {}", context, err))
+}
+
 struct Node {
     id: PeerId,
     _is_leader: bool,
@@ -56,8 +65,8 @@ pub async fn run_node(
 
     // Sends messages to replica from node
     let (to_replica_tx, to_replica_rx): (
-        mpsc::Sender<HotStuffMessage>,
-        mpsc::Receiver<HotStuffMessage>,
+        mpsc::Sender<ReplicaInBound>,
+        mpsc::Receiver<ReplicaInBound>,
     ) = mpsc::channel(1024);
 
     // Recieves messages from replica to node
@@ -68,7 +77,11 @@ pub async fn run_node(
 
     let mut replica = HotStuffReplica::new(node_index, from_replica_tx);
 
-    tokio::spawn(run_client_listener(client_addr.to_owned(), node.clone()));
+    tokio::spawn(run_client_listener(
+        client_addr.to_owned(),
+        node.clone(),
+        to_replica_tx.clone(),
+    ));
     tokio::spawn(run_peer_listener(
         node.clone(),
         consensus_addr.to_owned(),
@@ -82,15 +95,20 @@ pub async fn run_node(
 }
 
 /// client listener handles the application level communication
-async fn run_client_listener(client_addr: String, node: Arc<Mutex<Node>>) -> Result<()> {
+async fn run_client_listener(
+    client_addr: String,
+    node: Arc<Mutex<Node>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
     let client_listener: TcpListener = TcpListener::bind(&client_addr).await?;
     println!("Listening to client on {:?}", client_addr);
 
     loop {
         let (socket, _) = client_listener.accept().await?;
         let node = node.clone();
+        let to_replica_tx = to_replica_tx.clone();
         tokio::spawn(async move {
-            match handle_client_connection(socket, node).await {
+            match handle_client_connection(socket, node, to_replica_tx).await {
                 Ok(()) => println!("Successfully handled client connection"),
                 Err(e) => println!("Failed due to: {:?}", e),
             }
@@ -98,12 +116,16 @@ async fn run_client_listener(client_addr: String, node: Arc<Mutex<Node>>) -> Res
     }
 }
 
-async fn handle_client_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>) -> Result<()> {
+async fn handle_client_connection(
+    mut socket: TcpStream,
+    node: Arc<Mutex<Node>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
     loop {
         let message = message_protocol::receive_message(&mut socket).await?;
         match message {
             Message::Application(AppMessage::SubmitTransaction(tx)) => {
-                handle_transaction(&mut socket, &node, tx).await?;
+                handle_transaction(&mut socket, &node, tx, to_replica_tx.clone()).await?;
             }
             Message::Application(AppMessage::Query) => {
                 handle_query(&mut socket, &node).await?;
@@ -117,23 +139,35 @@ async fn handle_client_connection(mut socket: TcpStream, node: Arc<Mutex<Node>>)
 }
 
 async fn handle_peer_connection(
-    node: &Arc<Mutex<Node>>,
+    node: Arc<Mutex<Node>>,
     mut socket: TcpStream,
-    to_replica_tx: mpsc::Sender<HotStuffMessage>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     loop {
         let message = message_protocol::receive_message(&mut socket).await?;
         match message {
             Message::HotStuff(hot_stuff_message) => {
-                to_replica_tx.send(hot_stuff_message).await.map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("mpsc send to replica failed: {e}"),
-                    )
-                })?;
+                to_replica_tx
+                    .send(ReplicaInBound::HotStuff(hot_stuff_message))
+                    .await
+                    .map_err(|e| mpsc_error("Send to replica failed", e))?;
             }
             Message::Application(app_message) => match app_message {
-                AppMessage::SubmitTransaction(tx) => broadcast_transaction(node, tx).await?,
+                AppMessage::SubmitTransaction(tx) => {
+                    {
+                        let mut node = node.lock().await;
+                        if node.seen_transactions.insert(tx.hash()) {
+                            node.transactions.push(tx.clone());
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    broadcast_transaction(&node, tx.clone()).await?;
+                    to_replica_tx
+                        .send(ReplicaInBound::Transaction(tx))
+                        .await
+                        .map_err(|e| mpsc_error("Send to replica failed", e))?;
+                }
                 AppMessage::Ack => (),
                 _ => eprint!("Unexpected message on peer connection: {:?}", app_message),
             },
@@ -145,7 +179,7 @@ async fn handle_peer_connection(
 async fn run_peer_listener(
     node: Arc<Mutex<Node>>,
     concensus_addr: String,
-    to_replica_tx: mpsc::Sender<HotStuffMessage>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let peer_listener: TcpListener = TcpListener::bind(&concensus_addr).await?;
     println!("Listening to peers on {:?}", concensus_addr);
@@ -156,7 +190,7 @@ async fn run_peer_listener(
         let node_clone = node.clone();
         println!("Spawning peer listener");
         tokio::spawn(async move {
-            match handle_peer_connection(&node_clone, socket, tx_clone).await {
+            match handle_peer_connection(node_clone, socket, tx_clone).await {
                 Ok(()) => println!("Successfully handled peer connection"),
                 Err(e) => println!("Failed due to: {:?}", e),
             }
@@ -224,13 +258,10 @@ async fn connect_to_peers(peers: &Vec<PeerInfo>) -> Result<HashMap<PeerId, Arc<M
 
 async fn broadcast_transaction(node: &Arc<Mutex<Node>>, tx: Transaction) -> Result<()> {
     let id = {
-        let mut node = node.lock().await;
-
-        if node.seen_transactions.insert(tx.hash()) {
-            node.transactions.push(tx.clone());
-        }
+        let node = node.lock().await;
         node.id.clone()
     };
+
     let peer_connections: Vec<Arc<Mutex<TcpStream>>> = {
         let node = node.lock().await;
         node.peer_connections.values().cloned().collect()
@@ -243,6 +274,7 @@ async fn broadcast_transaction(node: &Arc<Mutex<Node>>, tx: Transaction) -> Resu
         id,
         peer_connections.len()
     );
+
     for stream in peer_connections {
         let cloned_tx = tx.clone();
         let task = tokio::spawn(async move {
@@ -271,6 +303,7 @@ async fn handle_transaction(
     mut socket: &mut TcpStream,
     node: &Arc<Mutex<Node>>,
     tx: Transaction,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     println!(
         "Received Transaction: {:?} on addr: {:?}",
@@ -278,8 +311,27 @@ async fn handle_transaction(
         socket.local_addr()
     );
 
+    {
+        let mut node = node.lock().await;
+        if node.seen_transactions.insert(tx.hash()) {
+            node.transactions.push(tx.clone());
+        } else {
+            return Ok(());
+        }
+    }
+
+    println!(
+        "Received Transaction: {:?} on addr: {:?}",
+        tx,
+        socket.local_addr()
+    );
+
     message_protocol::send_ack(&mut socket).await?;
-    broadcast_transaction(node, tx).await?;
+    broadcast_transaction(node, tx.clone()).await?;
+    to_replica_tx
+        .send(ReplicaInBound::Transaction(tx))
+        .await
+        .map_err(|e| mpsc_error("Send to replica failed", e))?;
 
     Ok(())
 }

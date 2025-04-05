@@ -1,10 +1,10 @@
 use crate::types::Sha256Hash;
-use serde::{ Deserialize, Serialize };
-use sha2::{ Digest, Sha256 };
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::{
-    block::{ Block, BlockHash },
-    crypto::{ PartialSig, QuorumCertificate },
+    block::{Block, BlockHash},
+    crypto::{PartialSig, QuorumCertificate},
     replica::ViewNumber,
 };
 
@@ -38,7 +38,7 @@ impl HotStuffMessage {
         message_type: HotStuffMessageType,
         node: Option<Block>,
         option_qc: Option<QuorumCertificate>,
-        curr_view: ViewNumber
+        curr_view: ViewNumber,
     ) -> Self {
         Self {
             message_type,
