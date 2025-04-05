@@ -1,7 +1,8 @@
-pub mod node;
 pub mod client;
-pub mod types;
+pub mod config;
+pub mod hotstuff;
+
 pub mod message_protocol;
 pub mod network;
-pub mod hotstuff;
-pub mod config;
+pub mod node;
+pub mod types;

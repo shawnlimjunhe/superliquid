@@ -107,10 +107,131 @@ impl QuorumCertificate {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use ed25519::signature::SignerMut;
     use ed25519_dalek::SigningKey;
 
-    use crate::hotstuff::crypto::PartialSig;
+    use crate::{
+        hotstuff::{
+            crypto::PartialSig,
+            message::{HotStuffMessage, HotStuffMessageType},
+        },
+        types::Sha256Hash,
+    };
+
+    use super::QuorumCertificate;
+
+    #[test]
+    fn test_create_genesis_qc_defaults() {
+        let qc = QuorumCertificate::create_genesis_qc();
+        assert_eq!(qc.view_number, 0);
+        assert_eq!(qc.message_type, HotStuffMessageType::Commit);
+        assert_eq!(qc.block_hash, [0u8; 32]);
+        assert_eq!(qc.message_hash, [0u8; 32]);
+        assert!(qc.partial_sigs.is_empty());
+    }
+
+    #[test]
+    fn test_from_votes_unchecked_constructs_qc() {
+        let mut signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let public_key = signing_key.verifying_key();
+        let message_hash = Sha256Hash::from([1u8; 32]);
+
+        let signature = signing_key.sign(&message_hash);
+        let partial_sig = PartialSig::new(public_key, signature);
+
+        let vote = HotStuffMessage {
+            message_type: HotStuffMessageType::Prepare,
+            view_number: 1,
+            node: None,
+            justify: None,
+            partial_sig: Some(partial_sig.clone()),
+        };
+
+        let qc = QuorumCertificate::from_votes_unchecked(&vec![vote]).unwrap();
+
+        assert_eq!(qc.view_number, 1);
+        assert_eq!(qc.message_type, HotStuffMessageType::Prepare);
+        assert_eq!(qc.partial_sigs.len(), 1);
+        assert_eq!(
+            qc.partial_sigs[0].signer_id.to_bytes(),
+            public_key.to_bytes()
+        );
+    }
+
+    #[test]
+    fn test_verify_qc_with_valid_sigs() {
+        let mut sk1 = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk1 = sk1.verifying_key();
+        let message_hash = Sha256Hash::from([2u8; 32]);
+        let sig1 = sk1.sign(&message_hash);
+
+        let mut sk2 = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk2 = sk2.verifying_key();
+        let sig2 = sk2.sign(&message_hash);
+
+        let mut sk3 = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk3 = sk3.verifying_key();
+        let sig3 = sk3.sign(&message_hash);
+
+        let sk4 = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk4 = sk4.verifying_key();
+
+        let partials = vec![
+            PartialSig::new(pk1, sig1),
+            PartialSig::new(pk2, sig2),
+            PartialSig::new(pk3, sig3),
+        ];
+
+        let qc = QuorumCertificate {
+            message_type: HotStuffMessageType::Commit,
+            view_number: 5,
+            block_hash: [3u8; 32],
+            message_hash,
+            partial_sigs: partials.clone(),
+        };
+
+        let mut validator_set = HashSet::new();
+        validator_set.insert(pk1);
+        validator_set.insert(pk2);
+        validator_set.insert(pk3);
+        validator_set.insert(pk4);
+
+        assert!(qc.verify(&validator_set, 3));
+        assert!(!qc.verify(&validator_set, 4)); // not enough
+    }
+
+    #[test]
+    fn test_verify_qc_rejects_invalid_sigs() {
+        let mut sk1 = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk1 = sk1.verifying_key();
+
+        let mut sk2 = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk2 = sk2.verifying_key();
+
+        let wrong_message = Sha256Hash::from([10u8; 32]);
+
+        let sig1 = sk1.sign(&Sha256Hash::from([9u8; 32])); // incorrect message
+        let sig2 = sk2.sign(&Sha256Hash::from([8u8; 32])); // incorrect message
+
+        let partials = vec![PartialSig::new(pk1, sig1), PartialSig::new(pk2, sig2)];
+
+        let qc = QuorumCertificate {
+            message_type: HotStuffMessageType::PreCommit,
+            view_number: 2,
+            block_hash: [11u8; 32],
+            message_hash: wrong_message,
+            partial_sigs: partials,
+        };
+
+        let mut validator_set = HashSet::new();
+        validator_set.insert(pk1);
+        validator_set.insert(pk2);
+
+        assert!(!qc.verify(&validator_set, 1));
+        assert!(!qc.verify(&validator_set, 2));
+    }
 
     #[test]
     fn test_signature_serialization_round_trip() {

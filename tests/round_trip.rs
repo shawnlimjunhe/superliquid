@@ -66,7 +66,7 @@ async fn test_transaction_broadcast() -> Result<()> {
     tokio::spawn(async {
         run_node(
             "127.0.0.1:2001".to_string(),
-            "127.to_string().0.0.1:3001".to_string(),
+            "127.0.0.1:3001".to_string(),
             node_0_peers,
             0,
         )
@@ -74,7 +74,7 @@ async fn test_transaction_broadcast() -> Result<()> {
         .unwrap();
     });
 
-    sleep(Duration::from_millis(250)).await;
+    sleep(Duration::from_millis(500)).await;
 
     tokio::spawn(async {
         run_node(

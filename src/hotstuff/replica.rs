@@ -6,7 +6,11 @@ use std::{
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core::le;
-use tokio::sync::mpsc::{self, error::SendError};
+use tokio::{
+    pin,
+    sync::mpsc::{self, error::SendError},
+    time::sleep,
+};
 
 use crate::{config, node::ReplicaOutbound};
 
@@ -407,14 +411,14 @@ impl HotStuffReplica {
         None
     }
 
-    pub fn create_new_view(mut self) -> HotStuffMessage {
+    pub fn advance_and_create_new_view(&mut self) -> HotStuffMessage {
         self.pacemaker.advance_view();
         self.view_number = self.pacemaker.curr_view;
         HotStuffMessage {
             message_type: HotStuffMessageType::NewView,
             view_number: self.view_number,
             node: None,
-            justify: self.prepare_qc,
+            justify: self.prepare_qc.clone(),
             partial_sig: None,
         }
     }
@@ -507,15 +511,35 @@ impl HotStuffReplica {
         &mut self,
         mut to_replica_rx: mpsc::Receiver<HotStuffMessage>,
     ) -> Result<(), SendError<ReplicaOutbound>> {
-        while let Some(msg) = to_replica_rx.recv().await {
-            match msg.message_type {
-                HotStuffMessageType::NewView => self.handle_new_view(msg).await?,
-                HotStuffMessageType::Prepare => self.handle_prepare(msg).await?,
-                HotStuffMessageType::PreCommit => self.handle_precommit(msg).await?,
-                HotStuffMessageType::Commit => self.handle_commit(msg).await?,
-                HotStuffMessageType::Decide => (),
+        loop {
+            // Refresh pacemaker timer dynamically each loop
+            let time_remaining = self.pacemaker.time_remaining();
+            let pacemaker_timer = sleep(time_remaining);
+            pin!(pacemaker_timer);
+
+            tokio::select! {
+                Some(msg) = to_replica_rx.recv() => {
+                    match msg.message_type {
+                        HotStuffMessageType::NewView => self.handle_new_view(msg).await?,
+                        HotStuffMessageType::Prepare => self.handle_prepare(msg).await?,
+                        HotStuffMessageType::PreCommit => self.handle_precommit(msg).await?,
+                        HotStuffMessageType::Commit => self.handle_commit(msg).await?,
+                        HotStuffMessageType::Decide => { /* handle or ignore */ },
+                    }
+                }
+
+                _ = &mut pacemaker_timer => {
+                    if self.pacemaker.should_advance_view() {
+
+                        let outbound_msg = self.advance_and_create_new_view();
+
+                        let leader = self.pacemaker.current_leader();
+                        self.node_sender
+                            .send(ReplicaOutbound::SendTo(leader, outbound_msg))
+                            .await?;
+                    }
+                }
             }
         }
-        Ok(())
     }
 }
