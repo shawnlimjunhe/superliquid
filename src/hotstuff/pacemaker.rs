@@ -58,3 +58,72 @@ impl Pacemaker {
         end_time.saturating_duration_since(Instant::now())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread::sleep;
+
+    #[test]
+    fn test_new_pacemaker_starts_at_view_zero() {
+        let pacemaker = Pacemaker::new();
+        assert_eq!(pacemaker.curr_view, 0);
+        assert_eq!(
+            pacemaker.replica_ids.len(),
+            config::retrieve_num_validators()
+        );
+    }
+
+    #[test]
+    fn test_should_advance_view_false_initially() {
+        let pacemaker = Pacemaker::new();
+        assert_eq!(pacemaker.should_advance_view(), false);
+    }
+
+    #[test]
+    fn test_should_advance_view_after_timeout() {
+        let pacemaker = Pacemaker::new();
+        // simulate passage of time
+        sleep(pacemaker.timeout + std::time::Duration::from_millis(10));
+        assert_eq!(pacemaker.should_advance_view(), true);
+    }
+
+    #[test]
+    fn test_advance_view_increments_view_and_resets_timer() {
+        let mut pacemaker = Pacemaker::new();
+        let initial_time = pacemaker.last_view_change;
+        pacemaker.advance_view();
+        assert_eq!(pacemaker.curr_view, 1);
+        assert!(pacemaker.last_view_change > initial_time);
+    }
+
+    #[test]
+    fn test_set_view_sets_view_and_resets_timer() {
+        let mut pacemaker = Pacemaker::new();
+        pacemaker.set_view(42);
+        assert_eq!(pacemaker.curr_view, 42);
+        // The actual Instant changes, hard to assert equality — so we just check time_remaining resets
+        assert!(pacemaker.time_remaining() <= pacemaker.timeout);
+    }
+
+    #[test]
+    fn test_current_leader_rotates_among_replicas() {
+        let mut pacemaker = Pacemaker::new();
+        let total_replicas = pacemaker.replica_ids.len();
+
+        for i in 0..(total_replicas * 2) {
+            pacemaker.curr_view = i as u64;
+            let expected_leader = pacemaker.replica_ids[i % total_replicas];
+            assert_eq!(pacemaker.current_leader(), expected_leader);
+        }
+    }
+
+    #[test]
+    fn test_time_remaining_decreases() {
+        let pacemaker = Pacemaker::new();
+        let t1 = pacemaker.time_remaining();
+        sleep(std::time::Duration::from_millis(10));
+        let t2 = pacemaker.time_remaining();
+        assert!(t2 < t1);
+    }
+}

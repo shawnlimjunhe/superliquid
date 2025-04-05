@@ -407,7 +407,7 @@ impl HotStuffReplica {
         None
     }
 
-    pub fn send_new_view(mut self) -> HotStuffMessage {
+    pub fn create_new_view(mut self) -> HotStuffMessage {
         self.pacemaker.advance_view();
         self.view_number = self.pacemaker.curr_view;
         HotStuffMessage {
@@ -449,6 +449,7 @@ impl HotStuffReplica {
                 .send(ReplicaOutbound::Broadcast(outbound_msg))
                 .await?
         } else {
+            let leader = self.pacemaker.current_leader();
             self.node_sender
                 .send(ReplicaOutbound::SendTo(leader, outbound_msg))
                 .await?
