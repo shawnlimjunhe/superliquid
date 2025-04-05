@@ -16,14 +16,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Check if .env file exists
+    - name: Set up .env and export vars
       run: |
-          if [ -f .env ]; then
-            echo ".env file exists"
-          else
-            echo "${{secrets.ENV_FILE}}" > .env
-            echo "created .env file"
-          fi
+        echo "${{ secrets.ENV_FILE }}" > .env
+        echo "${{ secrets.ENV_FILE }}" | while IFS= read -r line; do
+          echo "export $line" >> $GITHUB_ENV
+        done
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
