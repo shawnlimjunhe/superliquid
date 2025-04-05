@@ -77,19 +77,23 @@ pub async fn run_node(
 
     let mut replica = HotStuffReplica::new(node_index, from_replica_tx);
 
-    tokio::spawn(run_client_listener(
-        client_addr.to_owned(),
-        node.clone(),
-        to_replica_tx.clone(),
-    ));
-    tokio::spawn(run_peer_listener(
-        node.clone(),
-        consensus_addr.to_owned(),
-        to_replica_tx,
-    ));
+    let handles = vec![
+        tokio::spawn(run_client_listener(
+            client_addr.to_owned(),
+            node.clone(),
+            to_replica_tx.clone(),
+        )),
+        tokio::spawn(run_peer_listener(
+            node.clone(),
+            consensus_addr.to_owned(),
+            to_replica_tx,
+        )),
+    ];
 
     tokio::spawn(async move { replica.run_replica(to_replica_rx).await });
     tokio::spawn(handle_replica_outbound(from_replica_rx, node.clone()));
+
+    let _ = join_all(handles).await;
 
     Ok(())
 }
