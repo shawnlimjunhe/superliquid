@@ -16,12 +16,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up .env and export vars
+    - name: Set up .env and export vars to GITHUB_ENV
       run: |
         echo "${{ secrets.ENV_FILE }}" > .env
-        echo "${{ secrets.ENV_FILE }}" | while IFS= read -r line; do
-          echo "export $line" >> $GITHUB_ENV
-        done
+        while IFS= read -r line; do
+          echo "$line" >> $GITHUB_ENV
+        done < .env
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
