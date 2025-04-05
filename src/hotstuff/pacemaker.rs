@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::config;
+use crate::{config, pacemaker_log};
 
 use super::replica::ViewNumber;
 
@@ -39,7 +39,11 @@ impl Pacemaker {
     }
 
     pub(crate) fn advance_view(&mut self) {
-        println!("advancing view");
+        pacemaker_log!(
+            "Timeout occured - advancing view from {:?} to {:?}",
+            self.curr_view,
+            self.curr_view + 1
+        );
         self.curr_view += 1;
         self.last_view_change = Instant::now();
     }

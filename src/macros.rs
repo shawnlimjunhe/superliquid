@@ -10,3 +10,16 @@ macro_rules! replica_log {
         println!("{} {}", prefix, format!($($arg)*));
     }};
 }
+
+#[macro_export]
+macro_rules! pacemaker_log {
+    ($($arg:tt)*) => {{
+        use chrono::Local;
+        let now = Local::now().format("%H:%M:%S%.3f");
+        let prefix = format!(
+            "\x1b[90m[{}]\x1b[0m \x1b[96m[Pacemaker]\x1b[0m",
+            now,
+        );
+        println!("{} {}", prefix, format!($($arg)*));
+    }};
+}
