@@ -37,10 +37,14 @@ pub(super) async fn handle_transaction(
     tx: Transaction,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
-    println!(
-        "Received Transaction: {:?} on addr: {:?}",
-        tx,
-        socket.local_addr()
+    let log = node.log.clone();
+    log(
+        "info",
+        &format!(
+            "Received Transaction: {:?} on addr: {:?}",
+            tx,
+            socket.local_addr()
+        ),
     );
 
     {
@@ -55,12 +59,6 @@ pub(super) async fn handle_transaction(
         }
     }
 
-    println!(
-        "Received Transaction: {:?} on addr: {:?}",
-        tx,
-        socket.local_addr()
-    );
-
     broadcast_transaction(node, tx.clone()).await?;
     to_replica_tx
         .send(ReplicaInBound::Transaction(tx))
@@ -71,10 +69,11 @@ pub(super) async fn handle_transaction(
 }
 
 pub(super) async fn handle_query(mut socket: &mut TcpStream, node: &Arc<Node>) -> Result<()> {
-    println!(
-        "Received a query on: {:?} from: {:?}",
-        socket.local_addr(),
-        socket.peer_addr()
+    let log = node.log.clone();
+
+    log(
+        "info",
+        &format!("Received a query from {:?}", socket.peer_addr()),
     );
     let txs = {
         let transactions = node.transactions.lock().await;

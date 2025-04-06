@@ -54,6 +54,7 @@ pub(crate) async fn send_to_peer(
 
 pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> Result<()> {
     let id = node.id;
+    let log = &node.log;
 
     let peer_connections: Vec<Arc<Mutex<TcpStream>>> = {
         let peer_connections = node.peer_connections.lock().await;
@@ -62,10 +63,13 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
 
     let mut tasks = Vec::new();
 
-    println!(
-        "broadcasting tx from node {} to {} peers",
-        id,
-        peer_connections.len()
+    log(
+        "info",
+        &format!(
+            "broadcasting tx from node {} to {} peers",
+            id,
+            peer_connections.len()
+        ),
     );
 
     for stream in peer_connections {
@@ -81,13 +85,13 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
     for result in results {
         match result {
             Ok(Ok(())) => {
-                println!("sent transaction ");
+                log("info", "sent transaction ");
             }
-            Ok(Err(e)) => eprintln!("send_transaction error: {:?}", e),
-            Err(e) => eprintln!("task panicked: {:?}", e),
+            Ok(Err(e)) => log("Error", &format!("send_transaction error: {:?}", e)),
+            Err(e) => log("Error", &format!("task panicked: {:?}", e)),
         }
     }
 
-    println!("Finish broadcasting tx");
+    log("info", "Finish broadcasting tx");
     Ok(())
 }

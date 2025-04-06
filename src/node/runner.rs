@@ -16,12 +16,11 @@ use super::{
     client::listener::run_client_listener,
     peer::listener::run_peer_listener,
     replica::handle_replica_outbound,
-    state::{Node, PeerInfo},
+    state::{Node, NodeLogger, PeerInfo, node_logger},
 };
 use std::{
     collections::{HashMap, HashSet},
     io::Result,
-    rc::Rc,
     sync::Arc,
     time,
 };
@@ -55,21 +54,29 @@ async fn spawn_all_node_tasks(
     Ok(())
 }
 
-pub(crate) async fn connect_to_peer(addr: String, peer_id: usize, node_clone: Arc<Node>) {
+pub(crate) async fn connect_to_peer(
+    addr: String,
+    peer_id: usize,
+    node: Arc<Node>,
+    log: NodeLogger,
+) {
     let base: u32 = 100;
     let mut counts: u32 = 1;
     let max_sleep: u32 = 1000 * 60;
     loop {
         match TcpStream::connect(addr.clone()).await {
             Ok(mut stream) => {
-                println!("Connected to peer {} at {}", peer_id, addr);
-                send_hello(&mut stream, peer_id).await.unwrap();
-                let mut peer_connections = node_clone.peer_connections.lock().await;
+                log(
+                    "info",
+                    &format!("Connected to peer {} at {}", peer_id, addr),
+                );
+                send_hello(&mut stream, node.id).await.unwrap();
+                let mut peer_connections = node.peer_connections.lock().await;
                 peer_connections.insert(peer_id, Arc::new(Mutex::new(stream)));
                 break;
             }
             Err(e) => {
-                eprintln!("Failed to connect to {}: {:?}", addr, e);
+                log("error", &format!("Failed to connect to {}: {:?}", addr, e));
                 let exp_duration = base.pow(counts);
                 let sleep_duration = exp_duration.min(max_sleep);
                 if sleep_duration != max_sleep {
@@ -87,8 +94,9 @@ async fn connect_to_peers_background(peers: &Vec<PeerInfo>, node: &Arc<Node>) {
         let node_clone = node.clone();
         let peer_id = peer_info.peer_id;
         let addr = peer_info.peer_addr.clone();
+        let log = node.log.clone();
         tokio::spawn(async move {
-            connect_to_peer(addr, peer_id, node_clone).await;
+            connect_to_peer(addr, peer_id, node_clone, log).await;
         });
     }
 }
@@ -100,6 +108,8 @@ pub async fn run_node(
     node_index: usize,
 ) -> Result<()> {
     // Bind the listener to the address
+    let logger = node_logger(node_index);
+
     let peers = Arc::new(peers);
     let node = Arc::new(Node {
         id: node_index,
@@ -107,6 +117,7 @@ pub async fn run_node(
         peers: peers.clone(),
         seen_transactions: Mutex::new(HashSet::new()),
         peer_connections: Mutex::new(HashMap::new()),
+        log: logger.clone(),
     });
     connect_to_peers_background(&peers, &node).await;
 

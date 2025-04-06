@@ -1,11 +1,14 @@
 use std::io::{Error, ErrorKind, Result};
 
 use std::sync::Arc;
+use std::time;
 
+use chrono::Duration;
+use tokio::time::sleep;
 use tokio::{net::TcpStream, sync::mpsc};
 
 use crate::node::runner::connect_to_peer;
-use crate::node::state::{PeerId, PeerInfo};
+use crate::node::state::PeerId;
 use crate::{
     message_protocol::{self, AppMessage},
     node::state::Node,
@@ -27,13 +30,17 @@ pub(super) async fn handle_peer_connection(
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let first_msg = message_protocol::receive_message(&mut socket).await?;
+    let log = &node.log;
     let peer_id = match first_msg {
         Message::Application(AppMessage::Hello { peer_id }) => {
-            println!("Connection established with peer {peer_id}");
+            log(
+                "info",
+                &format!("Connection established with peer {peer_id}"),
+            );
             peer_id
         }
         other => {
-            eprint!("Expected Hello msg, got: {:?}", other);
+            log("Error", &format!("Expected Hello msg, got: {:?}", other));
             return Err(Error::new(ErrorKind::InvalidData, "Expected Hello Message"));
         }
     };
@@ -66,17 +73,22 @@ pub(super) async fn handle_peer_connection(
                         .map_err(|e| mpsc_error("Send to replica failed", e))?;
                 }
                 AppMessage::Ack => (),
-                _ => eprint!("Unexpected message on peer connection: {:?}", app_message),
+                _ => log(
+                    "Error",
+                    &format!("Unexpected message on peer connection: {:?}", app_message),
+                ),
             },
             Err(e) => {
-                eprint!("Peer {} disconnected: {:?}", peer_id, e);
+                log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
                 {
                     let mut peer_connections = node.peer_connections.lock().await;
                     peer_connections.remove(&peer_id);
+                    log("info", "Closing old connection to peer");
                 }
+                sleep(time::Duration::from_millis(500)).await;
                 match get_peer_info(node, peer_id) {
                     Some(peer_addr) => {
-                        connect_to_peer(peer_addr, peer_id, node.clone()).await;
+                        connect_to_peer(peer_addr, peer_id, node.clone(), node.log.clone()).await;
                     }
                     None => {
                         return Err(Error::new(

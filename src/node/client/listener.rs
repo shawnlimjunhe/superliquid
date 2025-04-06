@@ -15,16 +15,19 @@ pub(crate) async fn run_client_listener(
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let client_listener: TcpListener = TcpListener::bind(&client_addr).await?;
-    println!("Listening to client on {:?}", client_addr);
+    let log = node.log.clone();
+
+    log("info", &format!("Listening to client on {:?}", client_addr));
 
     loop {
         let (socket, _) = client_listener.accept().await?;
         let node = node.clone();
         let to_replica_tx = to_replica_tx.clone();
+        let log = log.clone();
         tokio::spawn(async move {
             match handle_client_connection(socket, node, to_replica_tx).await {
-                Ok(()) => println!("Successfully handled client connection"),
-                Err(e) => println!("Failed due to: {:?}", e),
+                Ok(()) => log("info", "Successfully handled client connection"),
+                Err(e) => log("info", &format!("Failed due to: {:?}", e)),
             }
         });
     }
