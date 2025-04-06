@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 
 use crate::hotstuff::message::HotStuffMessage;
+use crate::node::state::PeerId;
 use crate::types::Transaction;
 use crate::{network, types::Message};
 use std::io::{Error, ErrorKind, Result};
@@ -12,6 +13,7 @@ pub enum AppMessage {
     SubmitTransaction(Transaction),
     Response(Vec<Transaction>),
     Ack,
+    Hello { peer_id: usize },
     End, // Terminate connection
 }
 
@@ -32,6 +34,11 @@ pub async fn send_hotstuff_message(
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
     Ok(())
+}
+
+pub async fn send_hello(stream: &mut TcpStream, peer_id: PeerId) -> Result<()> {
+    let msg = AppMessage::Hello { peer_id };
+    send_message(stream, &Message::Application(msg)).await
 }
 
 pub async fn send_transaction(stream: &mut TcpStream, tx: Transaction) -> Result<()> {

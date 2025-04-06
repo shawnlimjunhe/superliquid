@@ -16,6 +16,7 @@ pub struct PeerInfo {
 
 pub struct Node {
     pub(super) id: PeerId,
+    pub(super) peers: Arc<Vec<PeerInfo>>,
     pub(super) transactions: Mutex<Vec<Transaction>>,
     pub(super) seen_transactions: Mutex<HashSet<[u8; 32]>>,
     pub(super) peer_connections: Mutex<HashMap<PeerId, Arc<Mutex<TcpStream>>>>, // For now, we skip peer discovery

@@ -1,8 +1,11 @@
-use std::io::Result;
+use std::io::{Error, ErrorKind, Result};
+
 use std::sync::Arc;
 
 use tokio::{net::TcpStream, sync::mpsc};
 
+use crate::node::runner::connect_to_peer;
+use crate::node::state::{PeerId, PeerInfo};
 use crate::{
     message_protocol::{self, AppMessage},
     node::state::Node,
@@ -11,21 +14,39 @@ use crate::{
 
 use super::broadcast::broadcast_transaction;
 
+fn get_peer_info(node: &Arc<Node>, peer_id: PeerId) -> Option<String> {
+    node.peers
+        .iter()
+        .find(|p| p.peer_id == peer_id)
+        .map(|p| p.peer_addr.clone())
+}
+
 pub(super) async fn handle_peer_connection(
-    node: Arc<Node>,
+    node: &Arc<Node>,
     mut socket: TcpStream,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
+    let first_msg = message_protocol::receive_message(&mut socket).await?;
+    let peer_id = match first_msg {
+        Message::Application(AppMessage::Hello { peer_id }) => {
+            println!("Connection established with peer {peer_id}");
+            peer_id
+        }
+        other => {
+            eprint!("Expected Hello msg, got: {:?}", other);
+            return Err(Error::new(ErrorKind::InvalidData, "Expected Hello Message"));
+        }
+    };
     loop {
-        let message = message_protocol::receive_message(&mut socket).await?;
+        let message = message_protocol::receive_message(&mut socket).await;
         match message {
-            Message::HotStuff(hot_stuff_message) => {
+            Ok(Message::HotStuff(hot_stuff_message)) => {
                 to_replica_tx
                     .send(ReplicaInBound::HotStuff(hot_stuff_message))
                     .await
                     .map_err(|e| mpsc_error("Send to replica failed", e))?;
             }
-            Message::Application(app_message) => match app_message {
+            Ok(Message::Application(app_message)) => match app_message {
                 AppMessage::SubmitTransaction(tx) => {
                     {
                         let mut seen_transactions = node.seen_transactions.lock().await;
@@ -47,6 +68,24 @@ pub(super) async fn handle_peer_connection(
                 AppMessage::Ack => (),
                 _ => eprint!("Unexpected message on peer connection: {:?}", app_message),
             },
+            Err(e) => {
+                eprint!("Peer {} disconnected: {:?}", peer_id, e);
+                {
+                    let mut peer_connections = node.peer_connections.lock().await;
+                    peer_connections.remove(&peer_id);
+                }
+                match get_peer_info(node, peer_id) {
+                    Some(peer_addr) => {
+                        connect_to_peer(peer_addr, peer_id, node.clone()).await;
+                    }
+                    None => {
+                        return Err(Error::new(
+                            ErrorKind::NotFound,
+                            format!("Peer address not found for peer id: {}", peer_id),
+                        ));
+                    }
+                }
+            }
         }
     }
 }
