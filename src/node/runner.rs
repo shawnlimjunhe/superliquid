@@ -1,7 +1,9 @@
+use chrono::Duration;
 use futures::future::join_all;
 use tokio::{
     net::TcpStream,
     sync::{Mutex, mpsc},
+    time::sleep,
 };
 
 use crate::{
@@ -13,12 +15,13 @@ use super::{
     client::listener::run_client_listener,
     peer::listener::run_peer_listener,
     replica::handle_replica_outbound,
-    state::{Node, PeerId, PeerInfo},
+    state::{Node, PeerInfo},
 };
 use std::{
     collections::{HashMap, HashSet},
     io::Result,
     sync::Arc,
+    time,
 };
 
 async fn spawn_all_node_tasks(
@@ -50,25 +53,41 @@ async fn spawn_all_node_tasks(
     Ok(())
 }
 
-async fn connect_to_peers(peers: &Vec<PeerInfo>) -> Result<HashMap<PeerId, Arc<Mutex<TcpStream>>>> {
-    let mut peer_connections = HashMap::new();
-
-    for peer_info in peers.iter() {
-        let peer_addr = &peer_info.peer_addr;
-        match TcpStream::connect(peer_addr).await {
+async fn connect_to_peer(addr: String, peer_id: usize, node_clone: Arc<Node>) {
+    let base: u32 = 100;
+    let mut counts: u32 = 1;
+    let max_sleep: u32 = 1000 * 60;
+    loop {
+        match TcpStream::connect(addr.clone()).await {
             Ok(stream) => {
-                peer_connections.insert(peer_info.peer_id, Arc::new(Mutex::new(stream)));
+                println!("Connected to peer {} at {}", peer_id, addr);
+                let mut peer_connections = node_clone.peer_connections.lock().await;
+                peer_connections.insert(peer_id, Arc::new(Mutex::new(stream)));
+                break;
             }
-            Err(e) => eprintln!("Failed to connect to {}: {:?}", peer_addr, e),
+            Err(e) => {
+                eprintln!("Failed to connect to {}: {:?}", addr, e);
+                let exp_duration = base.pow(counts);
+                let sleep_duration = exp_duration.min(max_sleep);
+                if sleep_duration != max_sleep {
+                    counts = counts.saturating_add(1);
+                }
+
+                sleep(time::Duration::from_millis(sleep_duration.into())).await;
+            }
         }
     }
+}
 
-    println!(
-        "Established connection to {:?} peers out of {:?}",
-        peer_connections.len(),
-        peers.len()
-    );
-    Ok(peer_connections)
+async fn connect_to_peers_background(peers: &Vec<PeerInfo>, node: &Arc<Node>) {
+    for peer_info in peers {
+        let node_clone = node.clone();
+        let peer_id = peer_info.peer_id;
+        let addr = peer_info.peer_addr.clone();
+        tokio::spawn(async move {
+            connect_to_peer(addr, peer_id, node_clone).await;
+        });
+    }
 }
 
 pub async fn run_node(
@@ -78,14 +97,13 @@ pub async fn run_node(
     node_index: usize,
 ) -> Result<()> {
     // Bind the listener to the address
-    let peer_connections: HashMap<PeerId, Arc<Mutex<TcpStream>>> = connect_to_peers(&peers).await?;
-
     let node = Arc::new(Node {
         id: node_index,
         transactions: Mutex::new(vec![]),
         seen_transactions: Mutex::new(HashSet::new()),
-        peer_connections: Mutex::new(peer_connections),
+        peer_connections: Mutex::new(HashMap::new()),
     });
+    connect_to_peers_background(&peers, &node).await;
 
     // Sends messages to replica from node
     let (to_replica_tx, to_replica_rx): (

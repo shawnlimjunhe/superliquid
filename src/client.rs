@@ -12,7 +12,11 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     let mut stream = TcpStream::connect(addr).await?;
 
+    println!("Connected to node");
+
     let _ = message_protocol::send_transaction(&mut stream, tx).await?;
+
+    println!("Sent transactions");
 
     let txs: Vec<Transaction> = message_protocol::send_query(&mut stream).await?;
 
