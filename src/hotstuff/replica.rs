@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-use futures::stream::TryNext;
 use tokio::{
     pin,
     sync::mpsc::{self, error::SendError},
@@ -9,10 +8,8 @@ use tokio::{
 };
 
 use crate::{
-    config,
-    node::{ReplicaInBound, ReplicaOutbound},
-    replica_log,
-    types::Transaction,
+    config, replica_log,
+    types::{ReplicaInBound, ReplicaOutbound, Transaction},
 };
 
 use super::{

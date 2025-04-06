@@ -1,6 +1,6 @@
 use superliquid::{
     message_protocol,
-    node::{PeerInfo, run_node},
+    node::{runner::run_node, state::PeerInfo},
     types::Transaction,
 };
 

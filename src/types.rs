@@ -1,7 +1,11 @@
+use std::io;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{hotstuff::message::HotStuffMessage, message_protocol::AppMessage};
+use crate::{
+    hotstuff::message::HotStuffMessage, message_protocol::AppMessage, node::state::PeerId,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaction {
@@ -24,4 +28,18 @@ impl Transaction {
 pub enum Message {
     Application(AppMessage),
     HotStuff(HotStuffMessage),
+}
+
+pub enum ReplicaOutbound {
+    Broadcast(HotStuffMessage),
+    SendTo(PeerId, HotStuffMessage),
+}
+
+pub enum ReplicaInBound {
+    HotStuff(HotStuffMessage),
+    Transaction(Transaction),
+}
+
+pub fn mpsc_error<E: std::fmt::Display>(context: &str, err: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, format!("{}: {}", context, err))
 }
