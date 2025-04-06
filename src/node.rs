@@ -38,7 +38,6 @@ fn mpsc_error<E: std::fmt::Display>(context: &str, err: E) -> io::Error {
 
 struct Node {
     id: PeerId,
-    _is_leader: bool,
     transactions: Vec<Transaction>,
     seen_transactions: HashSet<[u8; 32]>,
     peer_connections: HashMap<PeerId, Arc<Mutex<TcpStream>>>, // For now, we skip peer discovery
@@ -57,7 +56,6 @@ pub async fn run_node(
 
     let node = Arc::new(sync::Mutex::new(Node {
         id: node_index,
-        _is_leader: true,
         transactions: vec![],
         seen_transactions: HashSet::new(),
         peer_connections: peer_connections,

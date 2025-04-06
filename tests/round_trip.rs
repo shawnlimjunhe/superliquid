@@ -74,7 +74,7 @@ async fn test_transaction_broadcast() -> Result<()> {
         .unwrap();
     });
 
-    sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(50)).await;
 
     tokio::spawn(async {
         run_node(
@@ -88,7 +88,7 @@ async fn test_transaction_broadcast() -> Result<()> {
     });
 
     // Give the node a moment to start
-    sleep(Duration::from_millis(250)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Run client logic
     let tx = Transaction {
