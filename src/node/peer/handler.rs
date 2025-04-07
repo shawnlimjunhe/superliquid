@@ -1,13 +1,13 @@
 use std::io::{Error, ErrorKind, Result};
 
 use std::sync::Arc;
-use std::time;
 
 use chrono::Duration;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tokio::{net::TcpStream, sync::mpsc};
 
-use crate::node::runner::connect_to_peer;
+use crate::message_protocol::ControlMessage;
 use crate::node::state::PeerId;
 use crate::{
     message_protocol::{self, AppMessage},
@@ -24,18 +24,17 @@ fn get_peer_info(node: &Arc<Node>, peer_id: PeerId) -> Option<String> {
         .map(|p| p.peer_addr.clone())
 }
 
-pub(super) async fn handle_peer_connection(
+pub(super) async fn handle_handshake(
+    socket: Arc<Mutex<TcpStream>>,
     node: &Arc<Node>,
-    mut socket: TcpStream,
-    to_replica_tx: mpsc::Sender<ReplicaInBound>,
-) -> Result<()> {
-    let first_msg = message_protocol::receive_message(&mut socket).await?;
-    let log = &node.log;
+) -> Result<PeerId> {
+    let first_msg = message_protocol::receive_message(&socket).await?;
+    let log = node.log.clone();
     let peer_id = match first_msg {
-        Message::Application(AppMessage::Hello { peer_id }) => {
+        Message::Connection(ControlMessage::Hello { peer_id }) => {
             log(
                 "info",
-                &format!("Connection established with peer {peer_id}"),
+                &format!("On handshake: Connection established with peer {peer_id}"),
             );
             peer_id
         }
@@ -44,8 +43,18 @@ pub(super) async fn handle_peer_connection(
             return Err(Error::new(ErrorKind::InvalidData, "Expected Hello Message"));
         }
     };
+
+    Ok(peer_id)
+}
+
+pub(super) async fn handle_peer_connection(
+    node: &Arc<Node>,
+    socket: Arc<Mutex<TcpStream>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
+    let log = node.log.clone();
     loop {
-        let message = message_protocol::receive_message(&mut socket).await;
+        let message = message_protocol::receive_message(&socket).await;
         match message {
             Ok(Message::HotStuff(hot_stuff_message)) => {
                 to_replica_tx
@@ -78,25 +87,32 @@ pub(super) async fn handle_peer_connection(
                     &format!("Unexpected message on peer connection: {:?}", app_message),
                 ),
             },
+            Ok(Message::Connection(control_message)) => match control_message {
+                ControlMessage::Hello { .. } => { // can discard any new hello messages
+                }
+                _ => {}
+            },
             Err(e) => {
-                log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
-                {
-                    let mut peer_connections = node.peer_connections.lock().await;
-                    peer_connections.remove(&peer_id);
-                    log("info", "Closing old connection to peer");
-                }
-                sleep(time::Duration::from_millis(500)).await;
-                match get_peer_info(node, peer_id) {
-                    Some(peer_addr) => {
-                        connect_to_peer(peer_addr, peer_id, node.clone(), node.log.clone()).await;
-                    }
-                    None => {
-                        return Err(Error::new(
-                            ErrorKind::NotFound,
-                            format!("Peer address not found for peer id: {}", peer_id),
-                        ));
-                    }
-                }
+                // log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
+                // {
+                //     let mut peer_connections = node.peer_connections.lock().await;
+                //     peer_connections.remove(&peer_id);
+                //     log("info", "Closing old connection to peer");
+                // }
+                return Err(e);
+                // sleep(time::Duration::from_millis(500)).await;
+
+                // match get_peer_info(node, peer_id) {
+                //     Some(peer_addr) => {
+                //         connect_to_peer(peer_addr, peer_id, node.clone(), node.log.clone()).await;
+                //     }
+                //     None => {
+                //         return Err(Error::new(
+                //             ErrorKind::NotFound,
+                //             format!("Peer address not found for peer id: {}", peer_id),
+                //         ));
+                //     }
+                // }
             }
         }
     }

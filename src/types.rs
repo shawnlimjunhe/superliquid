@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    hotstuff::message::HotStuffMessage, message_protocol::AppMessage, node::state::PeerId,
+    hotstuff::message::HotStuffMessage,
+    message_protocol::{AppMessage, ControlMessage},
+    node::state::PeerId,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -26,6 +28,7 @@ impl Transaction {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
+    Connection(ControlMessage),
     Application(AppMessage),
     HotStuff(HotStuffMessage),
 }

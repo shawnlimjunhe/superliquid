@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 
 use crate::message_protocol;
 use crate::types::Transaction;
@@ -10,7 +13,9 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
         amount: 10,
     };
 
-    let mut stream = TcpStream::connect(addr).await?;
+    let stream = TcpStream::connect(addr).await?;
+
+    let mut stream = Arc::new(Mutex::new(stream));
 
     println!("Connected to node");
 

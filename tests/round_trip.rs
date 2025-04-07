@@ -4,10 +4,11 @@ use superliquid::{
     types::Transaction,
 };
 
-use std::io::Result;
+use std::{io::Result, sync::Arc};
 
 use tokio::{
     net::TcpStream,
+    sync::Mutex,
     time::{Duration, sleep},
 };
 
@@ -34,9 +35,11 @@ async fn test_transaction_round_trip() -> Result<()> {
         amount: 42,
     };
 
-    let mut stream = TcpStream::connect("127.0.0.1:9000").await?;
+    let stream = TcpStream::connect("127.0.0.1:9000").await?;
 
-    let txs: Vec<Transaction> = message_protocol::send_query(&mut stream).await?;
+    let mut stream = Arc::new(Mutex::new(stream));
+
+    let txs: Vec<Transaction> = message_protocol::send_query(&stream).await?;
     assert_eq!(txs.len(), 0);
 
     message_protocol::send_transaction(&mut stream, tx.clone()).await?;
@@ -97,19 +100,22 @@ async fn test_transaction_broadcast() -> Result<()> {
         amount: 42,
     };
 
-    let mut node_0_stream: TcpStream = TcpStream::connect("127.0.0.1:2001").await?;
-    let mut node_1_stream: TcpStream = TcpStream::connect("127.0.0.1:2002").await?;
+    let node_0_stream: TcpStream = TcpStream::connect("127.0.0.1:2001").await?;
+    let node_1_stream: TcpStream = TcpStream::connect("127.0.0.1:2002").await?;
 
-    let txs: Vec<Transaction> = message_protocol::send_query(&mut node_0_stream).await?;
+    let node_0_stream = Arc::new(Mutex::new(node_0_stream));
+    let node_1_stream = Arc::new(Mutex::new(node_1_stream));
+
+    let txs: Vec<Transaction> = message_protocol::send_query(&node_0_stream).await?;
     assert_eq!(txs.len(), 0);
 
-    message_protocol::send_transaction(&mut node_1_stream, tx.clone()).await?;
+    message_protocol::send_transaction(&node_1_stream, tx.clone()).await?;
 
     sleep(Duration::from_millis(100)).await;
-    let txs: Vec<Transaction> = message_protocol::send_query(&mut node_0_stream).await?;
+    let txs: Vec<Transaction> = message_protocol::send_query(&node_0_stream).await?;
     assert_eq!(txs.len(), 1);
 
-    message_protocol::send_end(&mut node_0_stream).await?;
-    message_protocol::send_end(&mut node_1_stream).await?;
+    message_protocol::send_end(&node_0_stream).await?;
+    message_protocol::send_end(&node_1_stream).await?;
     Ok(())
 }

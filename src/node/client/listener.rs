@@ -1,7 +1,10 @@
 use std::io::Result;
 use std::sync::Arc;
 
-use tokio::{net::TcpListener, sync::mpsc};
+use tokio::{
+    net::TcpListener,
+    sync::{Mutex, mpsc},
+};
 
 use crate::{
     node::{client::handler::handle_client_connection, state::Node},
@@ -24,10 +27,11 @@ pub(crate) async fn run_client_listener(
         let node = node.clone();
         let to_replica_tx = to_replica_tx.clone();
         let log = log.clone();
+        let socket = Arc::new(Mutex::new(socket));
         tokio::spawn(async move {
             match handle_client_connection(socket, node, to_replica_tx).await {
                 Ok(()) => log("info", "Successfully handled client connection"),
-                Err(e) => log("info", &format!("Failed due to: {:?}", e)),
+                Err(e) => log("info", &format!("Client Listener: Failed due to: {:?}", e)),
             }
         });
     }

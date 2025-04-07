@@ -24,10 +24,8 @@ pub(crate) async fn broadcast_hotstuff_message(
 
     for stream in peer_connections {
         let cloned_msg = msg.clone();
-        tokio::spawn(async move {
-            let mut stream = stream.lock().await;
-            send_message(&mut stream, &Message::HotStuff(cloned_msg)).await
-        });
+        let stream = stream.clone();
+        tokio::spawn(async move { send_message(&stream, &Message::HotStuff(cloned_msg)).await });
     }
 
     Ok(())
@@ -46,10 +44,7 @@ pub(crate) async fn send_to_peer(
     let Some(peer_connection) = peer_connection else {
         return Ok(());
     };
-    {
-        let mut peer_connection = peer_connection.lock().await;
-        send_message(&mut peer_connection, &Message::HotStuff(msg)).await
-    }
+    send_message(&peer_connection, &Message::HotStuff(msg)).await
 }
 
 pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> Result<()> {
@@ -74,10 +69,7 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
 
     for stream in peer_connections {
         let cloned_tx = tx.clone();
-        let task = tokio::spawn(async move {
-            let mut stream = stream.lock().await;
-            send_transaction(&mut stream, cloned_tx).await
-        });
+        let task = tokio::spawn(async move { send_transaction(&stream, cloned_tx).await });
         tasks.push(task);
     }
 

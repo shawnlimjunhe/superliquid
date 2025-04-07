@@ -16,7 +16,7 @@ use super::{
     client::listener::run_client_listener,
     peer::listener::run_peer_listener,
     replica::handle_replica_outbound,
-    state::{Node, NodeLogger, PeerInfo, node_logger},
+    state::{Node, NodeLogger, PeerId, PeerInfo, node_logger},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -54,6 +54,31 @@ async fn spawn_all_node_tasks(
     Ok(())
 }
 
+// It is possible for two nodes to establish connections with one another,
+// Without  Deduplication, we can have conflicting streams for the same peer.
+pub(crate) async fn deduplicate_peer_connection(
+    stream: Arc<Mutex<TcpStream>>,
+    node: &Arc<Node>,
+    peer_id: PeerId,
+) -> Arc<Mutex<TcpStream>> {
+    let log = node.log.clone();
+    let mut peer_connections = node.peer_connections.lock().await;
+    match peer_connections.get(&peer_id) {
+        Some(stream) => {
+            log(
+                "Info",
+                &format!("Deduplicated TCP stream with peer: {:?}", peer_id),
+            );
+            return stream.clone();
+        }
+        None => {
+            let stream_clone = stream.clone();
+            peer_connections.insert(peer_id, stream_clone);
+            return stream.clone();
+        }
+    }
+}
+
 pub(crate) async fn connect_to_peer(
     addr: String,
     peer_id: usize,
@@ -65,14 +90,14 @@ pub(crate) async fn connect_to_peer(
     let max_sleep: u32 = 1000 * 60;
     loop {
         match TcpStream::connect(addr.clone()).await {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 log(
                     "info",
-                    &format!("Connected to peer {} at {}", peer_id, addr),
+                    &format!("Initiate: Connection established with peer {}", peer_id),
                 );
-                send_hello(&mut stream, node.id).await.unwrap();
-                let mut peer_connections = node.peer_connections.lock().await;
-                peer_connections.insert(peer_id, Arc::new(Mutex::new(stream)));
+                let stream = Arc::new(Mutex::new(stream));
+                let stream = deduplicate_peer_connection(stream, &node, peer_id).await;
+                send_hello(stream, node.id).await.unwrap();
                 break;
             }
             Err(e) => {
@@ -118,6 +143,7 @@ pub async fn run_node(
         seen_transactions: Mutex::new(HashSet::new()),
         peer_connections: Mutex::new(HashMap::new()),
         log: logger.clone(),
+        socket_peer_map: Mutex::new(HashMap::new()),
     });
     connect_to_peers_background(&peers, &node).await;
 

@@ -1,14 +1,25 @@
+use std::sync::Arc;
+
 use serde::de::DeserializeOwned;
-use tokio::io::{ AsyncReadExt, AsyncWriteExt, AsyncWrite, AsyncRead };
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::Mutex,
+};
 
 use serde_json;
 
 const LEN_BUF_LEN: usize = 4;
 
-pub async fn send_data<W: AsyncWrite + Unpin>(stream: &mut W, data: &[u8]) -> std::io::Result<()> {
+pub async fn send_data<W>(stream: &Arc<Mutex<W>>, data: &[u8]) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     let data_len = (data.len() as u32).to_be_bytes();
-    let _ = stream.write_all(&data_len).await;
-    let _ = stream.write_all(data).await;
+    println!("sending data of length: {}", data.len());
+    let mut stream = stream.lock().await;
+    stream.write_all(&data_len).await?;
+    stream.write_all(data).await?;
+    stream.flush().await?;
     Ok(())
 }
 
@@ -18,6 +29,7 @@ pub async fn receive_data<W: AsyncRead + Unpin>(stream: &mut W) -> std::io::Resu
     stream.read_exact(&mut len_buf).await?;
 
     let msg_len = u32::from_be_bytes(len_buf) as usize;
+    println!("Expected len: {}", msg_len);
 
     let mut resp_buf = vec![0u8; msg_len];
 
@@ -26,13 +38,15 @@ pub async fn receive_data<W: AsyncRead + Unpin>(stream: &mut W) -> std::io::Resu
     Ok(resp_buf)
 }
 
-pub async fn receive_json<T: DeserializeOwned, W: AsyncRead + Unpin>(
-    stream: &mut W
-) -> std::io::Result<T> {
-    let raw_bytes: Vec<u8> = receive_data(stream).await?;
+pub async fn receive_json<T, R>(stream: &Arc<Mutex<R>>) -> std::io::Result<T>
+where
+    T: DeserializeOwned,
+    R: AsyncRead + Unpin,
+{
+    let mut guard = stream.lock().await;
+    let raw_bytes: Vec<u8> = receive_data(&mut *guard).await?;
 
-    let parsed = serde_json
-        ::from_slice::<T>(&raw_bytes)
+    let parsed = serde_json::from_slice::<T>(&raw_bytes)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(parsed)
@@ -41,14 +55,14 @@ pub async fn receive_json<T: DeserializeOwned, W: AsyncRead + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{ duplex, AsyncReadExt };
     use std::io::Result;
+    use tokio::io::{AsyncReadExt, duplex};
 
     async fn test_send_data_helper(payload: &[u8]) -> Result<()> {
         let expected_len = payload.len();
 
         // Create an in-memory stream pair (like a pipe)
-        let (mut client_end, mut server_end) = duplex(1024);
+        let (client_end, mut server_end) = duplex(1024);
 
         let expected_payload = payload.to_vec(); // clone to move into task
         let read_task = tokio::spawn(async move {
@@ -61,6 +75,8 @@ mod tests {
             server_end.read_exact(&mut data_buf).await.unwrap();
             assert_eq!(data_buf, expected_payload);
         });
+
+        let mut client_end = Arc::new(Mutex::new(client_end));
 
         send_data(&mut client_end, payload).await?;
 
@@ -81,7 +97,8 @@ mod tests {
             let data_len = (payload_to_send.len() as u32).to_be_bytes();
             let _ = client_end.write_all(&data_len).await;
             let _ = client_end.write_all(&payload_to_send).await;
-        }).await?;
+        })
+        .await?;
 
         let recieved_payload = receive_data(&mut server_end).await?;
 
@@ -116,14 +133,17 @@ mod tests {
         let (mut client_end, mut server_end) = duplex(1024);
 
         // Send only 2 bytes instead of 4 for length
-        tokio
-            ::spawn(async move {
-                let _ = client_end.write_all(&[0x00, 0x01]).await;
-            }).await
-            .unwrap();
+        tokio::spawn(async move {
+            let _ = client_end.write_all(&[0x00, 0x01]).await;
+        })
+        .await
+        .unwrap();
 
         let result = receive_data(&mut server_end).await;
-        assert!(result.is_err(), "Expected an error due to corrupted length prefix");
+        assert!(
+            result.is_err(),
+            "Expected an error due to corrupted length prefix"
+        );
     }
 
     #[tokio::test]
@@ -131,22 +151,25 @@ mod tests {
         let (mut client_end, mut server_end) = duplex(1024);
         let data = b"hello world";
 
-        tokio
-            ::spawn(async move {
-                let data_len = (data.len() as u32).to_be_bytes();
-                let _ = client_end.write_all(&data_len).await;
-                let _ = client_end.write_all(&data[..5]).await; // Send only part of the data
-                drop(client_end); // Close the stream early
-            }).await
-            .unwrap();
+        tokio::spawn(async move {
+            let data_len = (data.len() as u32).to_be_bytes();
+            let _ = client_end.write_all(&data_len).await;
+            let _ = client_end.write_all(&data[..5]).await; // Send only part of the data
+            drop(client_end); // Close the stream early
+        })
+        .await
+        .unwrap();
 
         let result = receive_data(&mut server_end).await;
-        assert!(result.is_err(), "Expected an error due to incomplete payload");
+        assert!(
+            result.is_err(),
+            "Expected an error due to incomplete payload"
+        );
     }
 
     #[tokio::test]
     async fn test_receive_json_success() -> std::io::Result<()> {
-        use serde::{ Deserialize, Serialize };
+        use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
         struct MyData {
@@ -160,11 +183,15 @@ mod tests {
         };
 
         let serialized = serde_json::to_vec(&payload).unwrap();
-        let (mut client_end, mut server_end) = duplex(1024);
+        let (client_end, server_end) = duplex(1024);
+
+        let mut client_end = Arc::new(Mutex::new(client_end));
 
         tokio::spawn(async move {
             send_data(&mut client_end, &serialized).await.unwrap();
         });
+
+        let mut server_end = Arc::new(Mutex::new(server_end));
 
         let result: MyData = receive_json(&mut server_end).await?;
         assert_eq!(result, payload);
@@ -173,13 +200,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_json_invalid_format() -> std::io::Result<()> {
-        let (mut client_end, mut server_end) = duplex(1024);
+        let (client_end, server_end) = duplex(1024);
 
         let garbage_data = b"definitely not json";
+
+        let mut client_end = Arc::new(Mutex::new(client_end));
 
         tokio::spawn(async move {
             send_data(&mut client_end, garbage_data).await.unwrap();
         });
+
+        let mut server_end = Arc::new(Mutex::new(server_end));
 
         let result: std::io::Result<serde_json::Value> = receive_json(&mut server_end).await;
         assert!(result.is_err());
@@ -192,7 +223,7 @@ mod tests {
         let full_json = br#"{"key": "value"}"#;
         let truncated_json = &full_json[..5]; // Cut off mid-string
 
-        let (mut client_end, mut server_end) = duplex(1024);
+        let (mut client_end, server_end) = duplex(1024);
         let length = (full_json.len() as u32).to_be_bytes();
 
         tokio::spawn(async move {
@@ -201,6 +232,8 @@ mod tests {
             drop(client_end); // simulate disconnect
         });
 
+        let mut server_end = Arc::new(Mutex::new(server_end));
+
         let result: std::io::Result<serde_json::Value> = receive_json(&mut server_end).await;
         assert!(result.is_err());
         Ok(())
@@ -208,8 +241,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_json_type_mismatch() -> std::io::Result<()> {
-        use tokio::io::duplex;
         use serde::Deserialize;
+        use tokio::io::duplex;
 
         #[derive(Debug, Deserialize)]
         struct ExpectedStruct {
@@ -218,11 +251,15 @@ mod tests {
 
         let wrong_json = serde_json::json!({ "unexpected_key": "oops" });
         let serialized = serde_json::to_vec(&wrong_json).unwrap();
-        let (mut client_end, mut server_end) = duplex(1024);
+        let (client_end, server_end) = duplex(1024);
+
+        let mut client_end = Arc::new(Mutex::new(client_end));
 
         tokio::spawn(async move {
             send_data(&mut client_end, &serialized).await.unwrap();
         });
+
+        let mut server_end = Arc::new(Mutex::new(server_end));
 
         let result: std::io::Result<ExpectedStruct> = receive_json(&mut server_end).await;
         assert!(result.is_err());

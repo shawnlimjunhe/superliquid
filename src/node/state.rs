@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::SocketAddr,
     sync::Arc,
 };
 
@@ -22,6 +23,7 @@ pub struct Node {
     pub(super) peers: Arc<Vec<PeerInfo>>,
     pub(super) transactions: Mutex<Vec<Transaction>>,
     pub(super) seen_transactions: Mutex<HashSet<[u8; 32]>>,
+    pub(super) socket_peer_map: Mutex<HashMap<SocketAddr, PeerId>>,
     pub(super) peer_connections: Mutex<HashMap<PeerId, Arc<Mutex<TcpStream>>>>, // For now, we skip peer discovery
     pub(super) log: NodeLogger,
 }
