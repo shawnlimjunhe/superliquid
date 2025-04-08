@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::hotstuff::message::HotStuffMessage;
 use crate::node::state::PeerId;
 use crate::types::Transaction;
-use crate::{network, types::Message};
-use std::io::{Error, ErrorKind, Result};
+use crate::{ network, types::Message };
+use std::io::{ Error, ErrorKind, Result };
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -19,11 +19,13 @@ pub enum AppMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ControlMessage {
-    Hello { peer_id: usize },
+    Hello {
+        peer_id: usize,
+    },
     End, // Terminate connection
 }
 
-pub async fn receive_message(stream: &Arc<Mutex<TcpStream>>) -> Result<Message> {
+pub async fn receive_message(stream: &Arc<Mutex<TcpStream>>) -> Result<Option<Message>> {
     network::receive_json::<Message, TcpStream>(stream).await
 }
 
@@ -35,7 +37,7 @@ pub async fn send_message(stream: &Arc<Mutex<TcpStream>>, message: &Message) -> 
 
 pub async fn send_hotstuff_message(
     stream: &Arc<Mutex<TcpStream>>,
-    message: &HotStuffMessage,
+    message: &HotStuffMessage
 ) -> Result<()> {
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
@@ -52,17 +54,16 @@ pub async fn send_transaction(stream: &Arc<Mutex<TcpStream>>, tx: Transaction) -
     send_message(stream, &Message::Application(msg)).await
 }
 
-pub async fn send_query(stream: &Arc<Mutex<TcpStream>>) -> Result<Vec<Transaction>> {
+pub async fn send_query(stream: &Arc<Mutex<TcpStream>>) -> Result<Option<Vec<Transaction>>> {
     let msg = AppMessage::Query;
     send_message(stream, &Message::Application(msg)).await?;
 
-    match receive_message(stream).await? {
-        Message::Application(AppMessage::Response(txs)) => Ok(txs), // basic ACK
-        other => Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Expected Response, got {:?}", other),
-        )),
-    }
+    Some(match receive_message(stream).await? {
+        Some(Message::Application(AppMessage::Response(txs))) => Ok(Some(txs)),
+        other =>
+            Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
+    });
+    return Ok(None);
 }
 
 pub async fn send_end(stream: &Arc<Mutex<TcpStream>>) -> Result<()> {
@@ -78,7 +79,7 @@ pub async fn send_ack(stream: &Arc<Mutex<TcpStream>>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::net::{ TcpListener, TcpStream };
 
     fn make_transaction() -> Transaction {
         Transaction {
@@ -98,7 +99,7 @@ mod tests {
             let socket = Arc::new(Mutex::new(socket));
             let msg = receive_message(&socket).await.unwrap();
             match msg {
-                Message::Application(AppMessage::SubmitTransaction(tx)) => {
+                Some(Message::Application(AppMessage::SubmitTransaction(tx))) => {
                     assert_eq!(tx.amount, 42);
                 }
                 _ => panic!("Expected Transaction"),
@@ -121,11 +122,12 @@ mod tests {
             let socket = Arc::new(Mutex::new(socket));
             let msg = receive_message(&socket).await.unwrap();
             match msg {
-                Message::Application(AppMessage::Query) => {
+                Some(Message::Application(AppMessage::Query)) => {
                     let txs = vec![make_transaction()];
-                    send_message(&socket, &&Message::Application(AppMessage::Response(txs)))
-                        .await
-                        .unwrap();
+                    send_message(
+                        &socket,
+                        &&Message::Application(AppMessage::Response(txs))
+                    ).await.unwrap();
                 }
                 _ => panic!("Expected Query"),
             }
@@ -134,8 +136,10 @@ mod tests {
         let stream = TcpStream::connect(addr).await?;
         let stream = Arc::new(Mutex::new(stream));
         let txs = send_query(&stream).await?;
+        let txs = txs.ok_or("Expected some, got none").unwrap();
         assert_eq!(txs.len(), 1);
         assert_eq!(txs[0].from, "alice");
+
         Ok(())
     }
 }

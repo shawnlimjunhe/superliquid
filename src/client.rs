@@ -23,9 +23,12 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     println!("Sent transactions");
 
-    let txs: Vec<Transaction> = message_protocol::send_query(&mut stream).await?;
+    let txs_opt: Option<Vec<Transaction>> = message_protocol::send_query(&mut stream).await?;
 
-    println!("Recieved Transactions: {:?}", txs);
+    match txs_opt {
+        Some(txs) => println!("Recieved Transactions: {:?}", txs),
+        None => println!("Recieved no Transaction"),
+    }
 
     println!("Ending connection.");
 
