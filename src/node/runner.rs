@@ -94,7 +94,19 @@ pub(crate) async fn connect_to_peer(
                     "info",
                     &format!("Initiate: Connection established with peer {}", peer_id),
                 );
+                let socket_addr = stream
+                    .peer_addr()
+                    .expect("Expect stream to have peer address");
                 let stream = Arc::new(Mutex::new(stream));
+
+                {
+                    let mut socket_peer_map = node.socket_peer_map.write().await;
+
+                    if !socket_peer_map.contains_key(&socket_addr) {
+                        socket_peer_map.insert(socket_addr, peer_id);
+                    }
+                }
+
                 let stream = deduplicate_peer_connection(stream, &node, peer_id).await;
                 send_hello(stream, node.id).await.unwrap();
                 break;

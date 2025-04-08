@@ -1,17 +1,20 @@
-use std::{ io::ErrorKind, sync::Arc };
+use std::{io::ErrorKind, sync::Arc};
 
 use serde::de::DeserializeOwned;
-use tokio::{ io::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt }, sync::Mutex };
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::Mutex,
+};
 
 use serde_json;
 
 const LEN_BUF_LEN: usize = 4;
 
 pub async fn send_data<W>(stream: &Arc<Mutex<W>>, data: &[u8]) -> std::io::Result<()>
-    where W: AsyncWrite + Unpin
+where
+    W: AsyncWrite + Unpin,
 {
     let data_len = (data.len() as u32).to_be_bytes();
-    println!("sending data of length: {}", data.len());
     let mut stream = stream.lock().await;
     stream.write_all(&data_len).await?;
     stream.write_all(data).await?;
@@ -20,7 +23,7 @@ pub async fn send_data<W>(stream: &Arc<Mutex<W>>, data: &[u8]) -> std::io::Resul
 }
 
 pub async fn receive_data<W: AsyncRead + Unpin>(
-    stream: &mut W
+    stream: &mut W,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let mut len_buf: [u8; 4] = [0u8; LEN_BUF_LEN];
 
@@ -33,7 +36,6 @@ pub async fn receive_data<W: AsyncRead + Unpin>(
     }
 
     let msg_len = u32::from_be_bytes(len_buf) as usize;
-    println!("Expected len: {}", msg_len);
 
     let mut resp_buf = vec![0u8; msg_len];
 
@@ -43,15 +45,16 @@ pub async fn receive_data<W: AsyncRead + Unpin>(
 }
 
 pub async fn receive_json<T, R>(stream: &Arc<Mutex<R>>) -> std::io::Result<Option<T>>
-    where T: DeserializeOwned, R: AsyncRead + Unpin
+where
+    T: DeserializeOwned,
+    R: AsyncRead + Unpin,
 {
     let mut guard = stream.lock().await;
     let raw_bytes_opt: Option<Vec<u8>> = receive_data(&mut *guard).await?;
 
     match raw_bytes_opt {
         Some(raw_bytes) => {
-            let parsed = serde_json
-                ::from_slice::<T>(&raw_bytes)
+            let parsed = serde_json::from_slice::<T>(&raw_bytes)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
             Ok(Some(parsed))
@@ -66,7 +69,7 @@ pub async fn receive_json<T, R>(stream: &Arc<Mutex<R>>) -> std::io::Result<Optio
 mod tests {
     use super::*;
     use std::io::Result;
-    use tokio::io::{ AsyncReadExt, duplex };
+    use tokio::io::{AsyncReadExt, duplex};
 
     async fn test_send_data_helper(payload: &[u8]) -> Result<()> {
         let expected_len = payload.len();
@@ -107,7 +110,8 @@ mod tests {
             let data_len = (payload_to_send.len() as u32).to_be_bytes();
             let _ = client_end.write_all(&data_len).await;
             let _ = client_end.write_all(&payload_to_send).await;
-        }).await?;
+        })
+        .await?;
 
         let recieved_payload_opt = receive_data(&mut server_end).await?;
 
@@ -144,15 +148,18 @@ mod tests {
         let (mut client_end, mut server_end) = duplex(1024);
 
         // Send only 2 bytes instead of 4 for length
-        tokio
-            ::spawn(async move {
-                let _ = client_end.write_all(&[0x00, 0x01]).await;
-            }).await
-            .unwrap();
+        tokio::spawn(async move {
+            let _ = client_end.write_all(&[0x00, 0x01]).await;
+        })
+        .await
+        .unwrap();
 
         let result = receive_data(&mut server_end).await;
         let result = result.expect("Expect Some, got None");
-        assert!(result.is_none(), "Expect to get none when failing due to eof, got some")
+        assert!(
+            result.is_none(),
+            "Expect to get none when failing due to eof, got some"
+        )
     }
 
     #[tokio::test]
@@ -160,22 +167,25 @@ mod tests {
         let (mut client_end, mut server_end) = duplex(1024);
         let data = b"hello world";
 
-        tokio
-            ::spawn(async move {
-                let data_len = (data.len() as u32).to_be_bytes();
-                let _ = client_end.write_all(&data_len).await;
-                let _ = client_end.write_all(&data[..5]).await; // Send only part of the data
-                drop(client_end); // Close the stream early
-            }).await
-            .unwrap();
+        tokio::spawn(async move {
+            let data_len = (data.len() as u32).to_be_bytes();
+            let _ = client_end.write_all(&data_len).await;
+            let _ = client_end.write_all(&data[..5]).await; // Send only part of the data
+            drop(client_end); // Close the stream early
+        })
+        .await
+        .unwrap();
 
         let result = receive_data(&mut server_end).await;
-        assert!(result.is_err(), "Expected an error due to incomplete payload");
+        assert!(
+            result.is_err(),
+            "Expected an error due to incomplete payload"
+        );
     }
 
     #[tokio::test]
     async fn test_receive_json_success() -> std::io::Result<()> {
-        use serde::{ Deserialize, Serialize };
+        use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
         struct MyData {
@@ -241,9 +251,8 @@ mod tests {
 
         let mut server_end = Arc::new(Mutex::new(server_end));
 
-        let result: std::io::Result<Option<serde_json::Value>> = receive_json(
-            &mut server_end
-        ).await;
+        let result: std::io::Result<Option<serde_json::Value>> =
+            receive_json(&mut server_end).await;
         assert!(result.is_err());
         Ok(())
     }

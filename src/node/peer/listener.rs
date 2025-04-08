@@ -17,6 +17,8 @@ async fn deduplicate_peer_connection_as_listener(
     stream: Arc<Mutex<TcpStream>>,
     node: &Arc<Node>,
 ) -> Option<Arc<Mutex<TcpStream>>> {
+    let log = node.log.clone();
+
     let socket_addr = {
         let stream = stream.lock().await;
         let socket_addr = stream.peer_addr();
@@ -27,30 +29,32 @@ async fn deduplicate_peer_connection_as_listener(
         socket_addr
     };
 
-    let peer_id = {
-        let socket_peer_map = node.socket_peer_map.read().await;
-
-        socket_peer_map.get(&socket_addr).copied()
+    // First check under read lock
+    if let Some(peer_id) = node.socket_peer_map.read().await.get(&socket_addr).copied() {
+        return Some(deduplicate_peer_connection(stream, node, peer_id).await);
     };
 
-    match peer_id {
-        Some(peer_id) => {
-            // Already have an ongoing connection
-            return Some(deduplicate_peer_connection(stream, node, peer_id).await);
-        }
-        None => {
-            let peer_id = match handle_handshake(stream.clone(), node).await {
-                Ok(peerid) => peerid,
-                Err(_) => return None,
-            };
-            {
-                let mut socket_peer_map = node.socket_peer_map.write().await;
-                socket_peer_map.insert(socket_addr, peer_id);
+    let peer_id = match handle_handshake(stream.clone(), node).await {
+        Ok(Some(peerid)) => peerid,
+        Ok(None) => {
+            log(
+                "Info",
+                "Expected peerId from handshake but got none, this stream might have been deduplicated",
+            );
+            if let Some(peer_id) = node.socket_peer_map.read().await.get(&socket_addr).copied() {
+                return Some(deduplicate_peer_connection(stream, node, peer_id).await);
             }
-
-            return Some(deduplicate_peer_connection(stream, node, peer_id).await);
+            return None;
         }
+        Err(_) => return None,
+    };
+
+    {
+        let mut socket_peer_map = node.socket_peer_map.write().await;
+        socket_peer_map.insert(socket_addr, peer_id);
     }
+
+    return Some(deduplicate_peer_connection(stream, node, peer_id).await);
 }
 
 /// peer listener handles the consensus layer communication
@@ -76,6 +80,7 @@ pub(crate) async fn run_peer_listener(
         let stream = Arc::new(Mutex::new(stream));
         let stream = deduplicate_peer_connection_as_listener(stream.clone(), &node).await;
 
+        println!("{:?}", stream);
         let stream = match stream {
             Some(stream) => stream,
             None => {
