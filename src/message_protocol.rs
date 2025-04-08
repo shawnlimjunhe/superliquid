@@ -1,12 +1,12 @@
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::hotstuff::message::HotStuffMessage;
 use crate::node::state::PeerId;
 use crate::types::Transaction;
-use crate::{ network, types::Message };
-use std::io::{ Error, ErrorKind, Result };
+use crate::{network, types::Message};
+use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -19,9 +19,7 @@ pub enum AppMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ControlMessage {
-    Hello {
-        peer_id: usize,
-    },
+    Hello { peer_id: usize },
     End, // Terminate connection
 }
 
@@ -37,7 +35,7 @@ pub async fn send_message(stream: &Arc<Mutex<TcpStream>>, message: &Message) -> 
 
 pub async fn send_hotstuff_message(
     stream: &Arc<Mutex<TcpStream>>,
-    message: &HotStuffMessage
+    message: &HotStuffMessage,
 ) -> Result<()> {
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
@@ -58,12 +56,13 @@ pub async fn send_query(stream: &Arc<Mutex<TcpStream>>) -> Result<Option<Vec<Tra
     let msg = AppMessage::Query;
     send_message(stream, &Message::Application(msg)).await?;
 
-    Some(match receive_message(stream).await? {
+    match receive_message(stream).await? {
         Some(Message::Application(AppMessage::Response(txs))) => Ok(Some(txs)),
-        other =>
-            Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
-    });
-    return Ok(None);
+        other => Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Expected Response, got {:?}", other),
+        )),
+    }
 }
 
 pub async fn send_end(stream: &Arc<Mutex<TcpStream>>) -> Result<()> {
@@ -79,7 +78,7 @@ pub async fn send_ack(stream: &Arc<Mutex<TcpStream>>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::{ TcpListener, TcpStream };
+    use tokio::net::{TcpListener, TcpStream};
 
     fn make_transaction() -> Transaction {
         Transaction {
@@ -114,29 +113,41 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_and_receive_query_response() -> Result<()> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?; // random port
+        use std::sync::Arc;
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::sync::Mutex;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
 
+        // Spawn the server-side task
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
             let socket = Arc::new(Mutex::new(socket));
-            let msg = receive_message(&socket).await.unwrap();
+
+            let msg_opt = receive_message(&socket).await.unwrap();
+            let msg = msg_opt.expect("Expected message, got None");
+
             match msg {
-                Some(Message::Application(AppMessage::Query)) => {
+                Message::Application(AppMessage::Query) => {
                     let txs = vec![make_transaction()];
-                    send_message(
-                        &socket,
-                        &&Message::Application(AppMessage::Response(txs))
-                    ).await.unwrap();
+                    println!("Received Query, sending response...");
+                    send_message(&socket, &Message::Application(AppMessage::Response(txs)))
+                        .await
+                        .unwrap();
+                    println!("Response sent.");
                 }
-                _ => panic!("Expected Query"),
+                _ => panic!("Expected AppMessage::Query, got {:?}", msg),
             }
         });
 
+        // Client-side test logic
         let stream = TcpStream::connect(addr).await?;
         let stream = Arc::new(Mutex::new(stream));
-        let txs = send_query(&stream).await?;
-        let txs = txs.ok_or("Expected some, got none").unwrap();
+
+        let txs_opt = send_query(&stream).await?;
+        let txs = txs_opt.expect("Expected Some(transaction), got None");
+
         assert_eq!(txs.len(), 1);
         assert_eq!(txs[0].from, "alice");
 
