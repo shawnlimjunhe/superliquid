@@ -18,7 +18,7 @@ pub(crate) async fn broadcast_hotstuff_message(
     msg: HotStuffMessage,
 ) -> Result<()> {
     let peer_connections: Vec<Arc<Mutex<TcpStream>>> = {
-        let peer_connections = node.peer_connections.lock().await;
+        let peer_connections = node.peer_connections.read().await;
         peer_connections.values().cloned().collect()
     };
 
@@ -37,7 +37,7 @@ pub(crate) async fn send_to_peer(
     peer_id: PeerId,
 ) -> Result<()> {
     let peer_connection = {
-        let peer_connections = node.peer_connections.lock().await;
+        let peer_connections = node.peer_connections.read().await;
         peer_connections.get(&peer_id).cloned()
     };
 
@@ -52,7 +52,7 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
     let log = &node.log;
 
     let peer_connections: Vec<Arc<Mutex<TcpStream>>> = {
-        let peer_connections = node.peer_connections.lock().await;
+        let peer_connections = node.peer_connections.read().await;
         peer_connections.values().cloned().collect()
     };
 

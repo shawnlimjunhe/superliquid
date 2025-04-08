@@ -28,7 +28,7 @@ async fn deduplicate_peer_connection_as_listener(
     };
 
     let peer_id = {
-        let socket_peer_map = node.socket_peer_map.lock().await;
+        let socket_peer_map = node.socket_peer_map.read().await;
 
         socket_peer_map.get(&socket_addr).copied()
     };
@@ -44,7 +44,7 @@ async fn deduplicate_peer_connection_as_listener(
                 Err(_) => return None,
             };
             {
-                let mut socket_peer_map = node.socket_peer_map.lock().await;
+                let mut socket_peer_map = node.socket_peer_map.write().await;
                 socket_peer_map.insert(socket_addr, peer_id);
             }
 

@@ -1,8 +1,7 @@
-use chrono::Duration;
 use futures::future::join_all;
 use tokio::{
     net::TcpStream,
-    sync::{Mutex, mpsc},
+    sync::{Mutex, RwLock, mpsc},
     time::sleep,
 };
 
@@ -62,7 +61,7 @@ pub(crate) async fn deduplicate_peer_connection(
     peer_id: PeerId,
 ) -> Arc<Mutex<TcpStream>> {
     let log = node.log.clone();
-    let mut peer_connections = node.peer_connections.lock().await;
+    let mut peer_connections = node.peer_connections.write().await;
     match peer_connections.get(&peer_id) {
         Some(stream) => {
             log(
@@ -141,9 +140,9 @@ pub async fn run_node(
         transactions: Mutex::new(vec![]),
         peers: peers.clone(),
         seen_transactions: Mutex::new(HashSet::new()),
-        peer_connections: Mutex::new(HashMap::new()),
+        peer_connections: RwLock::new(HashMap::new()),
         log: logger.clone(),
-        socket_peer_map: Mutex::new(HashMap::new()),
+        socket_peer_map: RwLock::new(HashMap::new()),
     });
     connect_to_peers_background(&peers, &node).await;
 
