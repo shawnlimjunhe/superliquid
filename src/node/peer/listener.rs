@@ -22,15 +22,15 @@ pub(crate) async fn run_peer_listener(
     to_replica_tx: mpsc::Sender<ReplicaInBound>
 ) -> Result<()> {
     let peer_listener: TcpListener = TcpListener::bind(&concensus_addr).await?;
-    let log = node.log.clone();
-    log("Info", &format!("Listening to peers on {:?}", concensus_addr));
+    let logger = node.logger.clone();
+    logger.log("Info", &format!("Listening to peers on {:?}", concensus_addr));
 
     loop {
         let (stream, _) = peer_listener.accept().await?;
         let tx_clone = to_replica_tx.clone();
         let node_clone = node.clone();
-        log("Info", "Spawning peer listener");
-        let log = log.clone();
+        logger.log("Info", "Spawning peer listener");
+        let logger = logger.clone();
         let stream = Arc::new(Mutex::new(stream));
 
         let peer_id = handle_handshake(stream.clone(), &node).await?;
@@ -39,8 +39,8 @@ pub(crate) async fn run_peer_listener(
 
         tokio::spawn(async move {
             match handle_peer_connection(&node_clone, stream, tx_clone).await {
-                Ok(()) => log("info", "Successfully handled peer connection"),
-                Err(e) => log("Error", &format!("Peer listener: Failed due to: {:?}", e)),
+                Ok(()) => logger.log("info", "Successfully handled peer connection"),
+                Err(e) => logger.log("Error", &format!("Peer listener: Failed due to: {:?}", e)),
             }
         });
     }

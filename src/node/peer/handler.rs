@@ -20,14 +20,17 @@ pub(super) async fn handle_handshake(
     node: &Arc<Node>
 ) -> Result<PeerId> {
     let first_msg = message_protocol::receive_message(&stream).await?;
-    let log = node.log.clone();
+    let logger = node.logger.clone();
     let peer_id = match first_msg {
         Some(Message::Connection(ControlMessage::Hello { peer_id })) => {
-            log("info", &format!("On handshake: Connection established with peer {peer_id}"));
+            logger.log(
+                "info",
+                &format!("On handshake: Connection established with peer {peer_id}")
+            );
             peer_id
         }
         other => {
-            log("Error", &format!("Expected Hello msg, got: {:?}", other));
+            logger.log("Error", &format!("Expected Hello msg, got: {:?}", other));
             return Err(Error::new(ErrorKind::InvalidData, "Expected Hello Message"));
         }
     };
@@ -41,7 +44,7 @@ pub(super) async fn handle_peer_connection(
     socket: Arc<Mutex<TcpStream>>,
     to_replica_tx: mpsc::Sender<ReplicaInBound>
 ) -> Result<()> {
-    let log = node.log.clone();
+    let logger = node.logger.clone();
     loop {
         let message = message_protocol::receive_message(&socket).await;
         match message {
@@ -71,7 +74,7 @@ pub(super) async fn handle_peer_connection(
                     }
                     AppMessage::Ack => (),
                     _ =>
-                        log(
+                        logger.log(
                             "Error",
                             &format!("Unexpected message on peer connection: {:?}", app_message)
                         ),
@@ -83,7 +86,7 @@ pub(super) async fn handle_peer_connection(
                     }
                     _ => {}
                 }
-            Ok(None) => log("Error", "Expected message, but got none"),
+            Ok(None) => logger.log("Error", "Expected message, but got none"),
             Err(e) => {
                 // log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
                 // {

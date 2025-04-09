@@ -2,20 +2,20 @@ use std::io::Result;
 use std::sync::Arc;
 
 use futures::future::join_all;
-use tokio::{net::TcpStream, sync::Mutex};
+use tokio::{ net::TcpStream, sync::Mutex };
 
 use crate::{
     hotstuff::message::HotStuffMessage,
-    message_protocol::{send_message, send_transaction},
-    node::state::{Node, PeerId},
-    types::{Message, Transaction},
+    message_protocol::{ send_message, send_transaction },
+    node::state::{ Node, PeerId },
+    types::{ Message, Transaction },
 };
 
 /// Broadcast msg to all peer connections
 
 pub(crate) async fn broadcast_hotstuff_message(
     node: &Arc<Node>,
-    msg: HotStuffMessage,
+    msg: HotStuffMessage
 ) -> Result<()> {
     let peer_connections: Vec<Arc<Mutex<TcpStream>>> = {
         let peer_connections = node.peer_connections.read().await;
@@ -34,7 +34,7 @@ pub(crate) async fn broadcast_hotstuff_message(
 pub(crate) async fn send_to_peer(
     node: &Arc<Node>,
     msg: HotStuffMessage,
-    peer_id: PeerId,
+    peer_id: PeerId
 ) -> Result<()> {
     let peer_connection = {
         let peer_connections = node.peer_connections.read().await;
@@ -49,7 +49,7 @@ pub(crate) async fn send_to_peer(
 
 pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> Result<()> {
     let id = node.id;
-    let log = &node.log;
+    let logger = &node.logger.clone();
 
     let peer_connections: Vec<Arc<Mutex<TcpStream>>> = {
         let peer_connections = node.peer_connections.read().await;
@@ -58,13 +58,9 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
 
     let mut tasks = Vec::new();
 
-    log(
+    logger.log(
         "info",
-        &format!(
-            "broadcasting tx from node {} to {} peers",
-            id,
-            peer_connections.len()
-        ),
+        &format!("broadcasting tx from node {} to {} peers", id, peer_connections.len())
     );
 
     for stream in peer_connections {
@@ -77,13 +73,13 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
     for result in results {
         match result {
             Ok(Ok(())) => {
-                log("info", "sent transaction ");
+                logger.log("info", "sent transaction ");
             }
-            Ok(Err(e)) => log("Error", &format!("send_transaction error: {:?}", e)),
-            Err(e) => log("Error", &format!("task panicked: {:?}", e)),
+            Ok(Err(e)) => logger.log("Error", &format!("send_transaction error: {:?}", e)),
+            Err(e) => logger.log("Error", &format!("task panicked: {:?}", e)),
         }
     }
 
-    log("info", "Finish broadcasting tx");
+    logger.log("info", "Finish broadcasting tx");
     Ok(())
 }

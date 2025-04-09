@@ -9,9 +9,10 @@ use crate::{
 
 use super::{
     client::listener::run_client_listener,
+    logger::ConsoleLogger,
     peer::listener::run_peer_listener,
     replica::handle_replica_outbound,
-    state::{ Node, NodeLogger, PeerId, PeerInfo, node_logger },
+    state::{ Node, PeerId, PeerInfo },
 };
 use std::{ collections::{ HashMap, HashSet }, io::Result, sync::Arc, time };
 
@@ -45,11 +46,11 @@ pub(crate) async fn deduplicate_peer_connection(
     node: &Arc<Node>,
     peer_id: PeerId
 ) -> Arc<Mutex<TcpStream>> {
-    let log = node.log.clone();
+    let logger = node.logger.clone();
     let mut peer_connections = node.peer_connections.write().await;
     match peer_connections.get(&peer_id) {
         Some(stream) => {
-            log("Info", &format!("Deduplicated TCP stream with peer: {:?}", peer_id));
+            logger.log("Info", &format!("Deduplicated TCP stream with peer: {:?}", peer_id));
             return stream.clone();
         }
         None => {
@@ -60,19 +61,18 @@ pub(crate) async fn deduplicate_peer_connection(
     }
 }
 
-pub(crate) async fn connect_to_peer(
-    addr: String,
-    peer_id: usize,
-    node: Arc<Node>,
-    log: NodeLogger
-) {
+pub(crate) async fn connect_to_peer(addr: String, peer_id: usize, node: Arc<Node>) {
     let base: u32 = 100;
     let mut counts: u32 = 1;
     let max_sleep: u32 = 1000 * 60;
+    let logger = node.logger.clone();
     loop {
         match TcpStream::connect(addr.clone()).await {
             Ok(stream) => {
-                log("info", &format!("Initiate: Connection established with peer {}", peer_id));
+                logger.log(
+                    "info",
+                    &format!("Initiate: Connection established with peer {}", peer_id)
+                );
                 let socket_addr = stream.peer_addr().expect("Expect stream to have peer address");
                 let stream = Arc::new(Mutex::new(stream));
 
@@ -90,7 +90,7 @@ pub(crate) async fn connect_to_peer(
                 break;
             }
             Err(e) => {
-                log("error", &format!("Failed to connect to {}: {:?}", addr, e));
+                logger.log("error", &format!("Failed to connect to {}: {:?}", addr, e));
                 let exp_duration = base.pow(counts);
                 let sleep_duration = exp_duration.min(max_sleep);
                 if sleep_duration != max_sleep {
@@ -108,9 +108,8 @@ async fn connect_to_peers_background(peers: &Vec<PeerInfo>, node: &Arc<Node>) {
         let node_clone = node.clone();
         let peer_id = peer_info.peer_id;
         let addr = peer_info.peer_addr.clone();
-        let log = node.log.clone();
         tokio::spawn(async move {
-            connect_to_peer(addr, peer_id, node_clone, log).await;
+            connect_to_peer(addr, peer_id, node_clone).await;
         });
     }
 }
@@ -122,7 +121,6 @@ pub async fn run_node(
     node_index: usize
 ) -> Result<()> {
     // Bind the listener to the address
-    let logger = node_logger(node_index);
 
     let peers = Arc::new(peers);
     let node = Arc::new(Node {
@@ -130,7 +128,7 @@ pub async fn run_node(
         transactions: Mutex::new(vec![]),
         seen_transactions: Mutex::new(HashSet::new()),
         peer_connections: RwLock::new(HashMap::new()),
-        log: logger.clone(),
+        logger: Arc::new(ConsoleLogger::new(node_index)),
         socket_peer_map: RwLock::new(HashMap::new()),
     });
     connect_to_peers_background(&peers, &node).await;

@@ -37,8 +37,8 @@ pub(super) async fn handle_transaction(
     tx: Transaction,
     to_replica_tx: mpsc::Sender<ReplicaInBound>
 ) -> Result<()> {
-    let log = node.log.clone();
-    log("info", &format!("Received Transaction: {:?}", tx));
+    let logger = node.logger.clone();
+    logger.log("info", &format!("Received Transaction: {:?}", tx));
 
     {
         let mut seen_transactions = node.seen_transactions.lock().await;
@@ -61,11 +61,11 @@ pub(super) async fn handle_transaction(
 }
 
 pub(super) async fn handle_query(socket: &Arc<Mutex<TcpStream>>, node: &Arc<Node>) -> Result<()> {
-    let log = node.log.clone();
+    let logger = node.logger.clone();
 
     let peer_addr = { socket.lock().await.peer_addr() };
 
-    log("info", &format!("Received a query from {:?}", peer_addr));
+    logger.log("info", &format!("Received a query from {:?}", peer_addr));
     let txs = {
         let transactions = node.transactions.lock().await;
         transactions.clone()
