@@ -32,3 +32,30 @@ impl Logger for ConsoleLogger {
         }
     }
 }
+
+#[cfg(test)]
+use std::sync::{ Arc, Mutex };
+#[cfg(test)]
+pub struct StubLogger {
+    pub logs: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+#[cfg(test)]
+impl StubLogger {
+    pub fn new() -> Self {
+        Self {
+            logs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn entries(&self) -> Arc<Mutex<Vec<(String, String)>>> {
+        Arc::clone(&self.logs)
+    }
+}
+
+#[cfg(test)]
+impl Logger for StubLogger {
+    fn log(&self, level: &str, msg: &str) {
+        self.logs.lock().unwrap().push((level.to_string(), msg.to_string()));
+    }
+}

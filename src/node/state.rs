@@ -5,7 +5,6 @@ use tokio::{ net::TcpStream, sync::{ Mutex, RwLock } };
 use crate::types::Transaction;
 
 pub type PeerId = usize;
-use chrono::Local;
 
 use super::logger::Logger;
 
