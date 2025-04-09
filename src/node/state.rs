@@ -1,13 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{ collections::{ HashMap, HashSet }, net::SocketAddr, sync::Arc };
 
-use tokio::{
-    net::TcpStream,
-    sync::{Mutex, RwLock},
-};
+use tokio::{ net::TcpStream, sync::{ Mutex, RwLock } };
 
 use crate::types::Transaction;
 
@@ -23,7 +16,6 @@ pub type NodeLogger = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 pub struct Node {
     pub(super) id: PeerId,
-    pub(super) peers: Arc<Vec<PeerInfo>>,
     pub(super) transactions: Mutex<Vec<Transaction>>,
     pub(super) seen_transactions: Mutex<HashSet<[u8; 32]>>,
     pub(super) socket_peer_map: RwLock<HashMap<SocketAddr, PeerId>>,

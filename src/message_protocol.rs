@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::hotstuff::message::HotStuffMessage;
 use crate::node::state::PeerId;
 use crate::types::Transaction;
-use crate::{network, types::Message};
-use std::io::{Error, ErrorKind, Result};
+use crate::{ network, types::Message };
+use std::io::{ Error, ErrorKind, Result };
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -19,7 +19,9 @@ pub enum AppMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ControlMessage {
-    Hello { peer_id: usize },
+    Hello {
+        peer_id: usize,
+    },
     End, // Terminate connection
 }
 
@@ -35,7 +37,7 @@ pub async fn send_message(stream: &Arc<Mutex<TcpStream>>, message: &Message) -> 
 
 pub async fn send_hotstuff_message(
     stream: &Arc<Mutex<TcpStream>>,
-    message: &HotStuffMessage,
+    message: &HotStuffMessage
 ) -> Result<()> {
     let json = serde_json::to_vec(&message)?;
     let _ = network::send_data(stream, &json).await;
@@ -44,7 +46,19 @@ pub async fn send_hotstuff_message(
 
 pub async fn send_hello(stream: Arc<Mutex<TcpStream>>, peer_id: PeerId) -> Result<()> {
     let msg = ControlMessage::Hello { peer_id };
-    send_message(&stream, &&Message::Connection(msg)).await
+    send_message(&stream, &&Message::Connection(msg)).await?;
+
+    let msg = receive_message(&stream).await?;
+    match msg {
+        None | Some(Message::Application(AppMessage::Ack)) => {
+            return Ok(());
+        }
+        Some(other) => {
+            return Err(
+                Error::new(ErrorKind::InvalidData, format!("Expected Ack or None, got {:?}", other))
+            );
+        }
+    }
 }
 
 pub async fn send_transaction(stream: &Arc<Mutex<TcpStream>>, tx: Transaction) -> Result<()> {
@@ -58,10 +72,8 @@ pub async fn send_query(stream: &Arc<Mutex<TcpStream>>) -> Result<Option<Vec<Tra
 
     match receive_message(stream).await? {
         Some(Message::Application(AppMessage::Response(txs))) => Ok(Some(txs)),
-        other => Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Expected Response, got {:?}", other),
-        )),
+        other =>
+            Err(Error::new(ErrorKind::InvalidData, format!("Expected Response, got {:?}", other))),
     }
 }
 
@@ -78,7 +90,7 @@ pub async fn send_ack(stream: &Arc<Mutex<TcpStream>>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::net::{ TcpListener, TcpStream };
 
     fn make_transaction() -> Transaction {
         Transaction {
@@ -114,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_and_receive_query_response() -> Result<()> {
         use std::sync::Arc;
-        use tokio::net::{TcpListener, TcpStream};
+        use tokio::net::{ TcpListener, TcpStream };
         use tokio::sync::Mutex;
 
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -132,9 +144,10 @@ mod tests {
                 Message::Application(AppMessage::Query) => {
                     let txs = vec![make_transaction()];
                     println!("Received Query, sending response...");
-                    send_message(&socket, &Message::Application(AppMessage::Response(txs)))
-                        .await
-                        .unwrap();
+                    send_message(
+                        &socket,
+                        &Message::Application(AppMessage::Response(txs))
+                    ).await.unwrap();
                     println!("Response sent.");
                 }
                 _ => panic!("Expected AppMessage::Query, got {:?}", msg),

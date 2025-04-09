@@ -1,28 +1,19 @@
 use futures::future::join_all;
-use tokio::{
-    net::TcpStream,
-    sync::{Mutex, RwLock, mpsc},
-    time::sleep,
-};
+use tokio::{ net::TcpStream, sync::{ Mutex, RwLock, mpsc }, time::sleep };
 
 use crate::{
     hotstuff::replica::HotStuffReplica,
     message_protocol::send_hello,
-    types::{ReplicaInBound, ReplicaOutbound},
+    types::{ ReplicaInBound, ReplicaOutbound },
 };
 
 use super::{
     client::listener::run_client_listener,
     peer::listener::run_peer_listener,
     replica::handle_replica_outbound,
-    state::{Node, NodeLogger, PeerId, PeerInfo, node_logger},
+    state::{ Node, NodeLogger, PeerId, PeerInfo, node_logger },
 };
-use std::{
-    collections::{HashMap, HashSet},
-    io::Result,
-    sync::Arc,
-    time,
-};
+use std::{ collections::{ HashMap, HashSet }, io::Result, sync::Arc, time };
 
 async fn spawn_all_node_tasks(
     client_addr: String,
@@ -31,19 +22,13 @@ async fn spawn_all_node_tasks(
     node: Arc<Node>,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
     to_replica_rx: mpsc::Receiver<ReplicaInBound>,
-    from_replica_rx: mpsc::Receiver<ReplicaOutbound>,
+    from_replica_rx: mpsc::Receiver<ReplicaOutbound>
 ) -> Result<()> {
     let handles = vec![
-        tokio::spawn(run_client_listener(
-            client_addr.to_owned(),
-            node.clone(),
-            to_replica_tx.clone(),
-        )),
-        tokio::spawn(run_peer_listener(
-            node.clone(),
-            consensus_addr.to_owned(),
-            to_replica_tx,
-        )),
+        tokio::spawn(
+            run_client_listener(client_addr.to_owned(), node.clone(), to_replica_tx.clone())
+        ),
+        tokio::spawn(run_peer_listener(node.clone(), consensus_addr.to_owned(), to_replica_tx))
     ];
 
     tokio::spawn(async move { replica.run_replica(to_replica_rx).await });
@@ -58,16 +43,13 @@ async fn spawn_all_node_tasks(
 pub(crate) async fn deduplicate_peer_connection(
     stream: Arc<Mutex<TcpStream>>,
     node: &Arc<Node>,
-    peer_id: PeerId,
+    peer_id: PeerId
 ) -> Arc<Mutex<TcpStream>> {
     let log = node.log.clone();
     let mut peer_connections = node.peer_connections.write().await;
     match peer_connections.get(&peer_id) {
         Some(stream) => {
-            log(
-                "Info",
-                &format!("Deduplicated TCP stream with peer: {:?}", peer_id),
-            );
+            log("Info", &format!("Deduplicated TCP stream with peer: {:?}", peer_id));
             return stream.clone();
         }
         None => {
@@ -82,7 +64,7 @@ pub(crate) async fn connect_to_peer(
     addr: String,
     peer_id: usize,
     node: Arc<Node>,
-    log: NodeLogger,
+    log: NodeLogger
 ) {
     let base: u32 = 100;
     let mut counts: u32 = 1;
@@ -90,13 +72,8 @@ pub(crate) async fn connect_to_peer(
     loop {
         match TcpStream::connect(addr.clone()).await {
             Ok(stream) => {
-                log(
-                    "info",
-                    &format!("Initiate: Connection established with peer {}", peer_id),
-                );
-                let socket_addr = stream
-                    .peer_addr()
-                    .expect("Expect stream to have peer address");
+                log("info", &format!("Initiate: Connection established with peer {}", peer_id));
+                let socket_addr = stream.peer_addr().expect("Expect stream to have peer address");
                 let stream = Arc::new(Mutex::new(stream));
 
                 {
@@ -107,8 +84,9 @@ pub(crate) async fn connect_to_peer(
                     }
                 }
 
-                let stream = deduplicate_peer_connection(stream, &node, peer_id).await;
-                send_hello(stream, node.id).await.unwrap();
+                send_hello(stream.clone(), node.id).await.unwrap();
+
+                let _ = deduplicate_peer_connection(stream, &node, peer_id).await;
                 break;
             }
             Err(e) => {
@@ -141,7 +119,7 @@ pub async fn run_node(
     client_addr: String,
     consensus_addr: String,
     peers: Vec<PeerInfo>,
-    node_index: usize,
+    node_index: usize
 ) -> Result<()> {
     // Bind the listener to the address
     let logger = node_logger(node_index);
@@ -150,7 +128,6 @@ pub async fn run_node(
     let node = Arc::new(Node {
         id: node_index,
         transactions: Mutex::new(vec![]),
-        peers: peers.clone(),
         seen_transactions: Mutex::new(HashSet::new()),
         peer_connections: RwLock::new(HashMap::new()),
         log: logger.clone(),
@@ -179,8 +156,7 @@ pub async fn run_node(
         node,
         to_replica_tx,
         to_replica_rx,
-        from_replica_rx,
-    )
-    .await;
+        from_replica_rx
+    ).await;
     Ok(())
 }

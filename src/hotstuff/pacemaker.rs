@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::{ Duration, Instant };
 
-use crate::{config, pacemaker_log};
+use crate::{ config, pacemaker_log };
 
 use super::replica::ViewNumber;
 
@@ -48,7 +48,7 @@ impl Pacemaker {
         self.last_view_change = Instant::now();
     }
 
-    pub(crate) fn set_view(&mut self, view_number: ViewNumber) {
+    pub(crate) fn _set_view(&mut self, view_number: ViewNumber) {
         self.curr_view = view_number;
         self.last_view_change = Instant::now();
     }
@@ -76,10 +76,7 @@ mod tests {
     fn test_new_pacemaker_starts_at_view_zero() {
         let pacemaker = Pacemaker::new();
         assert_eq!(pacemaker.curr_view, 0);
-        assert_eq!(
-            pacemaker.replica_ids.len(),
-            config::retrieve_num_validators()
-        );
+        assert_eq!(pacemaker.replica_ids.len(), config::retrieve_num_validators());
     }
 
     #[test]
@@ -108,7 +105,7 @@ mod tests {
     #[test]
     fn test_set_view_sets_view_and_resets_timer() {
         let mut pacemaker = Pacemaker::new();
-        pacemaker.set_view(42);
+        pacemaker._set_view(42);
         assert_eq!(pacemaker.curr_view, 42);
         // The actual Instant changes, hard to assert equality — so we just check time_remaining resets
         assert!(pacemaker.time_remaining() <= pacemaker.timeout);
@@ -119,7 +116,7 @@ mod tests {
         let mut pacemaker = Pacemaker::new();
         let total_replicas = pacemaker.replica_ids.len();
 
-        for i in 0..(total_replicas * 2) {
+        for i in 0..total_replicas * 2 {
             pacemaker.curr_view = i as u64;
             let expected_leader = pacemaker.replica_ids[i % total_replicas];
             assert_eq!(pacemaker.current_leader(), expected_leader);

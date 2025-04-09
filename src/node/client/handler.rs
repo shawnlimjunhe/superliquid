@@ -5,7 +5,7 @@ use tokio::{ net::TcpStream, sync::{ Mutex, mpsc } };
 
 use crate::{
     message_protocol::{ self, AppMessage, ControlMessage },
-    node::{ peer::{ self, broadcast::broadcast_transaction }, state::Node },
+    node::{ peer::broadcast::broadcast_transaction, state::Node },
     types::{ Message, ReplicaInBound, Transaction, mpsc_error },
 };
 
