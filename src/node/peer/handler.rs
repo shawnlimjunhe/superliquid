@@ -1,31 +1,33 @@
-use std::io::{ Error, ErrorKind, Result };
+use std::io::{Error, ErrorKind, Result};
 
 use std::sync::Arc;
 
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex;
-use tokio::{ net::TcpStream, sync::mpsc };
+use tokio::sync::mpsc;
 
-use crate::message_protocol::{ send_ack, ControlMessage };
+use crate::message_protocol::{ControlMessage, send_ack};
+use crate::node::logger::Logger;
 use crate::node::state::PeerId;
 use crate::{
-    message_protocol::{ self, AppMessage },
+    message_protocol::{self, AppMessage},
     node::state::Node,
-    types::{ Message, ReplicaInBound, mpsc_error },
+    types::{Message, ReplicaInBound, mpsc_error},
 };
 
 use super::broadcast::broadcast_transaction;
 
 pub(super) async fn handle_handshake(
-    stream: Arc<Mutex<TcpStream>>,
-    node: &Arc<Node>
+    reader: Arc<Mutex<OwnedReadHalf>>,
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    logger: Arc<dyn Logger>,
 ) -> Result<PeerId> {
-    let first_msg = message_protocol::receive_message(&stream).await?;
-    let logger = node.logger.clone();
+    let first_msg = message_protocol::receive_message(reader).await?;
     let peer_id = match first_msg {
         Some(Message::Connection(ControlMessage::Hello { peer_id })) => {
             logger.log(
                 "info",
-                &format!("On handshake: Connection established with peer {peer_id}")
+                &format!("On handshake: Connection established with peer {peer_id}"),
             );
             peer_id
         }
@@ -34,58 +36,58 @@ pub(super) async fn handle_handshake(
             return Err(Error::new(ErrorKind::InvalidData, "Expected Hello Message"));
         }
     };
-    send_ack(&stream).await?;
+    send_ack(writer).await?;
 
     Ok(peer_id)
 }
 
 pub(super) async fn handle_peer_connection(
     node: &Arc<Node>,
-    socket: Arc<Mutex<TcpStream>>,
-    to_replica_tx: mpsc::Sender<ReplicaInBound>
+    reader: Arc<Mutex<OwnedReadHalf>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let logger = node.logger.clone();
+
     loop {
-        let message = message_protocol::receive_message(&socket).await;
+        let message = message_protocol::receive_message(reader.clone()).await;
         match message {
             Ok(Some(Message::HotStuff(hot_stuff_message))) => {
                 to_replica_tx
-                    .send(ReplicaInBound::HotStuff(hot_stuff_message)).await
+                    .send(ReplicaInBound::HotStuff(hot_stuff_message))
+                    .await
                     .map_err(|e| mpsc_error("Send to replica failed", e))?;
             }
-            Ok(Some(Message::Application(app_message))) =>
-                match app_message {
-                    AppMessage::SubmitTransaction(tx) => {
-                        {
-                            let mut seen_transactions = node.seen_transactions.lock().await;
-                            if seen_transactions.insert(tx.hash()) {
-                                {
-                                    let mut transactions = node.transactions.lock().await;
-                                    transactions.push(tx.clone());
-                                }
-                            } else {
-                                return Ok(());
+            Ok(Some(Message::Application(app_message))) => match app_message {
+                AppMessage::SubmitTransaction(tx) => {
+                    {
+                        let mut seen_transactions = node.seen_transactions.lock().await;
+                        if seen_transactions.insert(tx.hash()) {
+                            {
+                                let mut transactions = node.transactions.lock().await;
+                                transactions.push(tx.clone());
                             }
+                        } else {
+                            return Ok(());
                         }
-                        broadcast_transaction(&node, tx.clone()).await?;
-                        to_replica_tx
-                            .send(ReplicaInBound::Transaction(tx)).await
-                            .map_err(|e| mpsc_error("Send to replica failed", e))?;
                     }
-                    AppMessage::Ack => (),
-                    _ =>
-                        logger.log(
-                            "Error",
-                            &format!("Unexpected message on peer connection: {:?}", app_message)
-                        ),
+                    broadcast_transaction(&node, tx.clone()).await?;
+                    to_replica_tx
+                        .send(ReplicaInBound::Transaction(tx))
+                        .await
+                        .map_err(|e| mpsc_error("Send to replica failed", e))?;
                 }
-            Ok(Some(Message::Connection(control_message))) =>
-                match control_message {
-                    ControlMessage::Hello { .. } => {
-                        // can discard any new hello messages
-                    }
-                    _ => {}
+                AppMessage::Ack => (),
+                _ => logger.log(
+                    "Error",
+                    &format!("Unexpected message on peer connection: {:?}", app_message),
+                ),
+            },
+            Ok(Some(Message::Connection(control_message))) => match control_message {
+                ControlMessage::Hello { .. } => {
+                    // can discard any new hello messages
                 }
+                _ => {}
+            },
             Ok(None) => logger.log("Error", "Expected message, but got none"),
             Err(e) => {
                 // log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));

@@ -1,10 +1,14 @@
 use futures::future::join_all;
-use tokio::{ net::TcpStream, sync::{ Mutex, RwLock, mpsc }, time::sleep };
+use tokio::{
+    net::TcpStream,
+    sync::{Mutex, RwLock, mpsc},
+    time::sleep,
+};
 
 use crate::{
     hotstuff::replica::HotStuffReplica,
     message_protocol::send_hello,
-    types::{ ReplicaInBound, ReplicaOutbound },
+    types::{ReplicaInBound, ReplicaOutbound},
 };
 
 use super::{
@@ -12,9 +16,14 @@ use super::{
     logger::ConsoleLogger,
     peer::listener::run_peer_listener,
     replica::handle_replica_outbound,
-    state::{ Node, PeerId, PeerInfo },
+    state::{Node, PeerId, PeerInfo, PeerSocket},
 };
-use std::{ collections::{ HashMap, HashSet }, io::Result, sync::Arc, time };
+use std::{
+    collections::{HashMap, HashSet},
+    io::Result,
+    sync::Arc,
+    time,
+};
 
 async fn spawn_all_node_tasks(
     client_addr: String,
@@ -23,13 +32,19 @@ async fn spawn_all_node_tasks(
     node: Arc<Node>,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
     to_replica_rx: mpsc::Receiver<ReplicaInBound>,
-    from_replica_rx: mpsc::Receiver<ReplicaOutbound>
+    from_replica_rx: mpsc::Receiver<ReplicaOutbound>,
 ) -> Result<()> {
     let handles = vec![
-        tokio::spawn(
-            run_client_listener(client_addr.to_owned(), node.clone(), to_replica_tx.clone())
-        ),
-        tokio::spawn(run_peer_listener(node.clone(), consensus_addr.to_owned(), to_replica_tx))
+        tokio::spawn(run_client_listener(
+            client_addr.to_owned(),
+            node.clone(),
+            to_replica_tx.clone(),
+        )),
+        tokio::spawn(run_peer_listener(
+            node.clone(),
+            consensus_addr.to_owned(),
+            to_replica_tx,
+        )),
     ];
 
     tokio::spawn(async move { replica.run_replica(to_replica_rx).await });
@@ -42,15 +57,18 @@ async fn spawn_all_node_tasks(
 // It is possible for two nodes to establish connections with one another,
 // Without  Deduplication, we can have conflicting streams for the same peer.
 pub(crate) async fn deduplicate_peer_connection(
-    stream: Arc<Mutex<TcpStream>>,
+    stream: Arc<PeerSocket>,
     node: &Arc<Node>,
-    peer_id: PeerId
-) -> Arc<Mutex<TcpStream>> {
+    peer_id: PeerId,
+) -> Arc<PeerSocket> {
     let logger = node.logger.clone();
     let mut peer_connections = node.peer_connections.write().await;
     match peer_connections.get(&peer_id) {
         Some(stream) => {
-            logger.log("Info", &format!("Deduplicated TCP stream with peer: {:?}", peer_id));
+            logger.log(
+                "Info",
+                &format!("Deduplicated TCP stream with peer: {:?}", peer_id),
+            );
             return stream.clone();
         }
         None => {
@@ -71,10 +89,13 @@ pub(crate) async fn connect_to_peer(addr: String, peer_id: usize, node: Arc<Node
             Ok(stream) => {
                 logger.log(
                     "info",
-                    &format!("Initiate: Connection established with peer {}", peer_id)
+                    &format!("Initiate: Connection established with peer {}", peer_id),
                 );
-                let socket_addr = stream.peer_addr().expect("Expect stream to have peer address");
-                let stream = Arc::new(Mutex::new(stream));
+                let socket_addr = stream
+                    .peer_addr()
+                    .expect("Expect stream to have peer address");
+
+                let (reader, writer) = stream.into_split();
 
                 {
                     let mut socket_peer_map = node.socket_peer_map.write().await;
@@ -83,10 +104,20 @@ pub(crate) async fn connect_to_peer(addr: String, peer_id: usize, node: Arc<Node
                         socket_peer_map.insert(socket_addr, peer_id);
                     }
                 }
+                let reader = Arc::new(Mutex::new(reader));
+                let writer = Arc::new(Mutex::new(writer));
 
-                send_hello(stream.clone(), node.id).await.unwrap();
+                let peer_socket = Arc::new(PeerSocket::new(reader, writer));
 
-                let _ = deduplicate_peer_connection(stream, &node, peer_id).await;
+                send_hello(
+                    peer_socket.writer.clone(),
+                    peer_socket.reader.clone(),
+                    node.id,
+                )
+                .await
+                .unwrap();
+
+                let _ = deduplicate_peer_connection(peer_socket, &node, peer_id).await;
                 break;
             }
             Err(e) => {
@@ -118,7 +149,7 @@ pub async fn run_node(
     client_addr: String,
     consensus_addr: String,
     peers: Vec<PeerInfo>,
-    node_index: usize
+    node_index: usize,
 ) -> Result<()> {
     // Bind the listener to the address
 
@@ -154,7 +185,8 @@ pub async fn run_node(
         node,
         to_replica_tx,
         to_replica_rx,
-        from_replica_rx
-    ).await;
+        from_replica_rx,
+    )
+    .await;
     Ok(())
 }

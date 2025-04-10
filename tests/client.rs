@@ -1,12 +1,16 @@
 use superliquid::{
     message_protocol,
-    node::{ runner::run_node, state::PeerInfo },
+    node::{runner::run_node, state::PeerInfo},
     types::Transaction,
 };
 
-use std::{ io::Result, sync::Arc };
+use std::{io::Result, sync::Arc};
 
-use tokio::{ net::TcpStream, sync::Mutex, time::{ Duration, sleep } };
+use tokio::{
+    net::TcpStream,
+    sync::Mutex,
+    time::{Duration, sleep},
+};
 
 #[tokio::test]
 async fn test_transaction_round_trip() -> Result<()> {
@@ -15,8 +19,10 @@ async fn test_transaction_round_trip() -> Result<()> {
             "127.0.0.1:9000".to_string(),
             "127.to_string().0.0.1:8000".to_owned(),
             vec![],
-            0
-        ).await.unwrap();
+            0,
+        )
+        .await
+        .unwrap();
     });
 
     // Give the node a moment to start
@@ -31,19 +37,24 @@ async fn test_transaction_round_trip() -> Result<()> {
 
     let stream = TcpStream::connect("127.0.0.1:9000").await?;
 
-    let mut stream = Arc::new(Mutex::new(stream));
+    let (reader, writer) = stream.into_split();
 
-    let txs_opt: Option<Vec<Transaction>> = message_protocol::send_query(&stream).await?;
+    let reader = Arc::new(Mutex::new(reader));
+    let writer = Arc::new(Mutex::new(writer));
+
+    let txs_opt: Option<Vec<Transaction>> =
+        message_protocol::send_query(reader.clone(), writer.clone()).await?;
     let txs = txs_opt.expect("Expect Some, got None");
     assert_eq!(txs.len(), 0);
 
-    message_protocol::send_transaction(&mut stream, tx.clone()).await?;
+    message_protocol::send_transaction(writer.clone(), tx.clone()).await?;
 
-    let txs_opt: Option<Vec<Transaction>> = message_protocol::send_query(&mut stream).await?;
+    let txs_opt: Option<Vec<Transaction>> =
+        message_protocol::send_query(reader.clone(), writer.clone()).await?;
     let txs = txs_opt.expect("Expect Some, got None");
     assert_eq!(txs.len(), 1);
 
-    message_protocol::send_end(&mut stream).await?;
+    message_protocol::send_end(writer).await?;
     Ok(())
 }
 
@@ -67,8 +78,10 @@ async fn test_transaction_broadcast() -> Result<()> {
             "127.0.0.1:2001".to_string(),
             "127.0.0.1:3001".to_string(),
             node_0_peers,
-            0
-        ).await.unwrap();
+            0,
+        )
+        .await
+        .unwrap();
     });
 
     sleep(Duration::from_millis(50)).await;
@@ -78,8 +91,10 @@ async fn test_transaction_broadcast() -> Result<()> {
             "127.0.0.1:2002".to_string(),
             "127.0.0.1:3002".to_string(),
             node_1_peers,
-            1
-        ).await.unwrap();
+            1,
+        )
+        .await
+        .unwrap();
     });
 
     // Give the node a moment to start
@@ -95,21 +110,27 @@ async fn test_transaction_broadcast() -> Result<()> {
     let node_0_stream: TcpStream = TcpStream::connect("127.0.0.1:2001").await?;
     let node_1_stream: TcpStream = TcpStream::connect("127.0.0.1:2002").await?;
 
-    let node_0_stream = Arc::new(Mutex::new(node_0_stream));
-    let node_1_stream = Arc::new(Mutex::new(node_1_stream));
+    let (reader_0, writer_0) = node_0_stream.into_split();
+    let reader_0 = Arc::new(Mutex::new(reader_0));
+    let writer_0 = Arc::new(Mutex::new(writer_0));
 
-    let txs_opt: Option<Vec<Transaction>> = message_protocol::send_query(&node_0_stream).await?;
+    let (_reader_1, writer_1) = node_1_stream.into_split();
+    let writer_1 = Arc::new(Mutex::new(writer_1));
+
+    let txs_opt: Option<Vec<Transaction>> =
+        message_protocol::send_query(reader_0.clone(), writer_0.clone()).await?;
     let txs = txs_opt.expect("Expected Some, got none");
     assert_eq!(txs.len(), 0);
 
-    message_protocol::send_transaction(&node_1_stream, tx.clone()).await?;
+    message_protocol::send_transaction(writer_1.clone(), tx.clone()).await?;
 
     sleep(Duration::from_millis(100)).await;
-    let txs_opt: Option<Vec<Transaction>> = message_protocol::send_query(&node_0_stream).await?;
+    let txs_opt: Option<Vec<Transaction>> =
+        message_protocol::send_query(reader_0, writer_0.clone()).await?;
     let txs = txs_opt.expect("Expected Some, got none");
     assert_eq!(txs.len(), 1);
 
-    message_protocol::send_end(&node_0_stream).await?;
-    message_protocol::send_end(&node_1_stream).await?;
+    message_protocol::send_end(writer_0).await?;
+    message_protocol::send_end(writer_1).await?;
     Ok(())
 }

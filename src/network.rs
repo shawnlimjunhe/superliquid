@@ -10,7 +10,7 @@ use serde_json;
 
 const LEN_BUF_LEN: usize = 4;
 
-pub async fn send_data<W>(stream: &Arc<Mutex<W>>, data: &[u8]) -> std::io::Result<()>
+pub async fn send_data<W>(stream: Arc<Mutex<W>>, data: &[u8]) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
@@ -44,12 +44,12 @@ pub async fn receive_data<W: AsyncRead + Unpin>(
     Ok(Some(resp_buf))
 }
 
-pub async fn receive_json<T, R>(stream: &Arc<Mutex<R>>) -> std::io::Result<Option<T>>
+pub async fn receive_json<T, R>(reader: Arc<Mutex<R>>) -> std::io::Result<Option<T>>
 where
     T: DeserializeOwned,
     R: AsyncRead + Unpin,
 {
-    let mut guard = stream.lock().await;
+    let mut guard = reader.lock().await;
     let raw_bytes_opt: Option<Vec<u8>> = receive_data(&mut *guard).await?;
 
     match raw_bytes_opt {
@@ -89,9 +89,9 @@ mod tests {
             assert_eq!(data_buf, expected_payload);
         });
 
-        let mut client_end = Arc::new(Mutex::new(client_end));
+        let client_end = Arc::new(Mutex::new(client_end));
 
-        send_data(&mut client_end, payload).await?;
+        send_data(client_end, payload).await?;
 
         // Wait for the read task to finish
         read_task.await.unwrap();
@@ -201,15 +201,15 @@ mod tests {
         let serialized = serde_json::to_vec(&payload).unwrap();
         let (client_end, server_end) = duplex(1024);
 
-        let mut client_end = Arc::new(Mutex::new(client_end));
+        let client_end = Arc::new(Mutex::new(client_end));
 
         tokio::spawn(async move {
-            send_data(&mut client_end, &serialized).await.unwrap();
+            send_data(client_end, &serialized).await.unwrap();
         });
 
-        let mut server_end = Arc::new(Mutex::new(server_end));
+        let server_end = Arc::new(Mutex::new(server_end));
 
-        let result_opt: Option<MyData> = receive_json(&mut server_end).await?;
+        let result_opt: Option<MyData> = receive_json(server_end).await?;
         let result = result_opt.expect("Expeced Some, got None");
         assert_eq!(result, payload);
         Ok(())
@@ -221,15 +221,14 @@ mod tests {
 
         let garbage_data = b"definitely not json";
 
-        let mut client_end = Arc::new(Mutex::new(client_end));
+        let client_end = Arc::new(Mutex::new(client_end));
 
         tokio::spawn(async move {
-            send_data(&mut client_end, garbage_data).await.unwrap();
+            send_data(client_end, garbage_data).await.unwrap();
         });
 
-        let mut server_end = Arc::new(Mutex::new(server_end));
-
-        let result: Result<Option<serde_json::Value>> = receive_json(&mut server_end).await;
+        let server_end = Arc::new(Mutex::new(server_end));
+        let result: Result<Option<serde_json::Value>> = receive_json(server_end).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
         Ok(())
@@ -249,10 +248,8 @@ mod tests {
             drop(client_end); // simulate disconnect
         });
 
-        let mut server_end = Arc::new(Mutex::new(server_end));
-
-        let result: std::io::Result<Option<serde_json::Value>> =
-            receive_json(&mut server_end).await;
+        let server_end = Arc::new(Mutex::new(server_end));
+        let result: std::io::Result<Option<serde_json::Value>> = receive_json(server_end).await;
         assert!(result.is_err());
         Ok(())
     }
@@ -271,15 +268,14 @@ mod tests {
         let serialized = serde_json::to_vec(&wrong_json).unwrap();
         let (client_end, server_end) = duplex(1024);
 
-        let mut client_end = Arc::new(Mutex::new(client_end));
+        let client_end = Arc::new(Mutex::new(client_end));
 
         tokio::spawn(async move {
-            send_data(&mut client_end, &serialized).await.unwrap();
+            send_data(client_end, &serialized).await.unwrap();
         });
 
-        let mut server_end = Arc::new(Mutex::new(server_end));
-
-        let result: std::io::Result<Option<ExpectedStruct>> = receive_json(&mut server_end).await;
+        let server_end = Arc::new(Mutex::new(server_end));
+        let result: std::io::Result<Option<ExpectedStruct>> = receive_json(server_end).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
         Ok(())

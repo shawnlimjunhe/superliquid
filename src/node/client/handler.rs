@@ -1,28 +1,32 @@
 use std::io::Result;
 use std::sync::Arc;
 
-use tokio::{ net::TcpStream, sync::{ Mutex, mpsc } };
-
-use crate::{
-    message_protocol::{ self, AppMessage, ControlMessage },
-    node::{ peer::broadcast::broadcast_transaction, state::Node },
-    types::{ Message, ReplicaInBound, Transaction, mpsc_error },
+use tokio::{
+    net::tcp::OwnedWriteHalf,
+    sync::{Mutex, mpsc},
 };
 
+use crate::{
+    message_protocol::{self, AppMessage, ControlMessage},
+    node::{peer::broadcast::broadcast_transaction, state::Node},
+    types::{Message, ReplicaInBound, Transaction, mpsc_error},
+};
+
+use super::listener::ClientSocket;
+
 pub(super) async fn handle_client_connection(
-    socket: Arc<Mutex<TcpStream>>,
+    socket: ClientSocket,
     node: Arc<Node>,
-    to_replica_tx: mpsc::Sender<ReplicaInBound>
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
-    let socket = socket.clone();
     loop {
-        let message = message_protocol::receive_message(&socket).await?;
+        let message = message_protocol::receive_message(socket.reader.clone()).await?;
         match message {
             Some(Message::Application(AppMessage::SubmitTransaction(tx))) => {
                 handle_transaction(&node, tx, to_replica_tx.clone()).await?;
             }
             Some(Message::Application(AppMessage::Query)) => {
-                handle_query(&socket, &node).await?;
+                handle_query(socket.writer.clone(), &node).await?;
             }
             Some(Message::Connection(ControlMessage::End)) => {
                 return Ok(());
@@ -35,7 +39,7 @@ pub(super) async fn handle_client_connection(
 pub(super) async fn handle_transaction(
     node: &Arc<Node>,
     tx: Transaction,
-    to_replica_tx: mpsc::Sender<ReplicaInBound>
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let logger = node.logger.clone();
     logger.log("info", &format!("Received Transaction: {:?}", tx));
@@ -52,23 +56,27 @@ pub(super) async fn handle_transaction(
         }
     }
 
-    broadcast_transaction(node, tx.clone()).await?;
+    broadcast_transaction(&node, tx.clone()).await?;
     to_replica_tx
-        .send(ReplicaInBound::Transaction(tx)).await
+        .send(ReplicaInBound::Transaction(tx))
+        .await
         .map_err(|e| mpsc_error("Send to replica failed", e))?;
 
     Ok(())
 }
 
-pub(super) async fn handle_query(socket: &Arc<Mutex<TcpStream>>, node: &Arc<Node>) -> Result<()> {
+pub(super) async fn handle_query(
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    node: &Arc<Node>,
+) -> Result<()> {
     let logger = node.logger.clone();
 
-    let peer_addr = { socket.lock().await.peer_addr() };
+    let peer_addr = { writer.lock().await.peer_addr() };
 
     logger.log("info", &format!("Received a query from {:?}", peer_addr));
     let txs = {
         let transactions = node.transactions.lock().await;
         transactions.clone()
     };
-    message_protocol::send_message(&socket, &&Message::Application(AppMessage::Response(txs))).await
+    message_protocol::send_message(writer, &&Message::Application(AppMessage::Response(txs))).await
 }

@@ -15,15 +15,18 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     let stream = TcpStream::connect(addr).await?;
 
-    let mut stream = Arc::new(Mutex::new(stream));
+    let (reader, writer) = stream.into_split();
+    let reader = Arc::new(Mutex::new(reader));
+    let writer = Arc::new(Mutex::new(writer));
 
     println!("Connected to node");
 
-    let _ = message_protocol::send_transaction(&mut stream, tx).await?;
+    let _ = message_protocol::send_transaction(writer.clone(), tx).await?;
 
     println!("Sent transactions");
 
-    let txs_opt: Option<Vec<Transaction>> = message_protocol::send_query(&mut stream).await?;
+    let txs_opt: Option<Vec<Transaction>> =
+        message_protocol::send_query(reader, writer.clone()).await?;
 
     match txs_opt {
         Some(txs) => println!("Recieved Transactions: {:?}", txs),
@@ -32,7 +35,7 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     println!("Ending connection.");
 
-    message_protocol::send_end(&mut stream).await?;
+    message_protocol::send_end(writer).await?;
 
     Ok(())
 }
