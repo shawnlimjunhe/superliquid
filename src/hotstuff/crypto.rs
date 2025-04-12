@@ -115,12 +115,25 @@ mod tests {
     use crate::{
         hotstuff::{
             crypto::PartialSig,
-            message::{HotStuffMessage, HotStuffMessageType},
+            message::{self, HotStuffMessage, HotStuffMessageType},
+            replica::ViewNumber,
         },
         types::Sha256Hash,
     };
 
     use super::QuorumCertificate;
+
+    impl QuorumCertificate {
+        pub fn mock(view_number: ViewNumber) -> Self {
+            QuorumCertificate {
+                message_type: HotStuffMessageType::Prepare,
+                view_number,
+                block_hash: [0u8; 32],
+                message_hash: [0u8; 32],
+                partial_sigs: vec![],
+            }
+        }
+    }
 
     #[test]
     fn test_create_genesis_qc_defaults() {

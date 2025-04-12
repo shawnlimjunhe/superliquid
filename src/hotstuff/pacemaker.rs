@@ -1,12 +1,14 @@
-use std::time::{ Duration, Instant };
+use std::time::{Duration, Instant};
 
-use crate::{ config, pacemaker_log };
+use crate::{config, pacemaker_log};
 
-use super::replica::ViewNumber;
+use super::{crypto::QuorumCertificate, replica::ViewNumber};
 
 pub struct Pacemaker {
     pub curr_view: ViewNumber,
+    pub last_commited_view: ViewNumber,
     pub timeout: Duration,
+    pub base_timeout: Duration,
     pub last_view_change: Instant,
     replica_ids: Vec<usize>,
     // pub highest_qc: QuorumCertificate,
@@ -15,27 +17,30 @@ pub struct Pacemaker {
 
 impl Pacemaker {
     pub(crate) fn new() -> Self {
-        //   let genesis_block = Block::create_genesis_block();
-
-        // let justify = match &genesis_block {
-        //   Block::Genesis { justify, .. } => justify.clone(),
-        // _ => panic!("Expected Genesis block, got something else"),
-        // };
-
         let replica_len = config::retrieve_num_validators();
         let replica_ids = (0..replica_len).collect();
         Self {
             curr_view: 0,
+            last_commited_view: 0,
             timeout: config::retrieve_tick_duration(),
+            base_timeout: config::retrieve_tick_duration(),
             last_view_change: Instant::now(),
             replica_ids,
-            //   highest_qc: justify,
-            //   leaf: genesis_block,
         }
     }
 
     pub(crate) fn should_advance_view(&self) -> bool {
-        self.last_view_change.elapsed() > self.timeout
+        self.last_view_change.elapsed() > self.get_current_timeout()
+    }
+
+    pub(crate) fn get_current_timeout(&self) -> Duration {
+        let failed_views = self.curr_view - self.last_commited_view;
+        let base: u32 = 2;
+        self.base_timeout * base.pow(failed_views as u32)
+    }
+
+    pub(crate) fn set_last_committed_view(&mut self, qc: &QuorumCertificate) {
+        self.last_commited_view = qc.view_number;
     }
 
     pub(crate) fn advance_view(&mut self) {
@@ -48,8 +53,11 @@ impl Pacemaker {
         self.last_view_change = Instant::now();
     }
 
-    pub(crate) fn _set_view(&mut self, view_number: ViewNumber) {
-        self.curr_view = view_number;
+    pub(crate) fn set_view(&mut self, incoming_view: ViewNumber) {
+        if incoming_view <= self.curr_view {
+            return;
+        }
+        self.curr_view = incoming_view;
         self.last_view_change = Instant::now();
     }
 
@@ -62,7 +70,7 @@ impl Pacemaker {
     }
 
     pub(crate) fn time_remaining(&self) -> Duration {
-        let end_time = self.last_view_change + self.timeout;
+        let end_time = self.last_view_change + self.get_current_timeout();
         end_time.saturating_duration_since(Instant::now())
     }
 }
@@ -76,7 +84,10 @@ mod tests {
     fn test_new_pacemaker_starts_at_view_zero() {
         let pacemaker = Pacemaker::new();
         assert_eq!(pacemaker.curr_view, 0);
-        assert_eq!(pacemaker.replica_ids.len(), config::retrieve_num_validators());
+        assert_eq!(
+            pacemaker.replica_ids.len(),
+            config::retrieve_num_validators()
+        );
     }
 
     #[test]
@@ -103,12 +114,45 @@ mod tests {
     }
 
     #[test]
-    fn test_set_view_sets_view_and_resets_timer() {
+    fn test_set_view_updates_view_and_resets_timer() {
         let mut pacemaker = Pacemaker::new();
-        pacemaker._set_view(42);
-        assert_eq!(pacemaker.curr_view, 42);
-        // The actual Instant changes, hard to assert equality — so we just check time_remaining resets
-        assert!(pacemaker.time_remaining() <= pacemaker.timeout);
+
+        pacemaker.curr_view = 5;
+        let before = pacemaker.last_view_change;
+
+        std::thread::sleep(Duration::from_millis(10)); // Let time pass
+
+        pacemaker.set_view(10); // Should update view and reset timer
+
+        assert_eq!(pacemaker.curr_view, 10);
+        assert!(pacemaker.last_view_change > before);
+    }
+
+    #[test]
+    fn test_set_view_does_not_regress_or_reset_timer() {
+        let mut pacemaker = Pacemaker::new();
+
+        pacemaker.curr_view = 8;
+        let before = pacemaker.last_view_change;
+
+        std::thread::sleep(Duration::from_millis(10)); // Let time pass
+
+        pacemaker.set_view(6); // Should NOT update or reset
+
+        assert_eq!(pacemaker.curr_view, 8);
+        assert_eq!(pacemaker.last_view_change, before);
+    }
+
+    #[test]
+    fn test_get_current_timeout_exponential_backoff() {
+        let mut pacemaker = Pacemaker::new();
+        pacemaker.base_timeout = Duration::from_millis(10);
+
+        pacemaker.curr_view = 3;
+        pacemaker.last_commited_view = 1;
+        // 3 - 1 = 2 => 10ms * 2^2 = 10ms * 4 = 40ms
+        let expected = Duration::from_millis(40);
+        assert_eq!(pacemaker.get_current_timeout(), expected);
     }
 
     #[test]
@@ -135,13 +179,29 @@ mod tests {
     #[test]
     fn test_should_advance_view() {
         let mut pacemaker = Pacemaker::new();
-        pacemaker.timeout = Duration::from_millis(50);
 
-        // Should not advance immediately
-        assert!(!pacemaker.should_advance_view());
+        // Override timeout to make the test fast
+        pacemaker.base_timeout = Duration::from_millis(20);
+        pacemaker.curr_view = 2;
+        pacemaker.last_commited_view = 0;
 
-        // Wait past the timeout
-        sleep(Duration::from_millis(60));
-        assert!(pacemaker.should_advance_view());
+        // Initially, it should not advance (timeout hasn't passed)
+        assert_eq!(pacemaker.should_advance_view(), false);
+
+        // Wait long enough to exceed the exponential backoff timeout
+        // Timeout = base * 2^(2 - 0) = 20ms * 4 = 80ms
+        std::thread::sleep(Duration::from_millis(85));
+
+        assert_eq!(pacemaker.should_advance_view(), true);
+    }
+
+    #[test]
+    fn test_set_last_committed_view_updates_correctly() {
+        let mut pacemaker = Pacemaker::new();
+        assert_eq!(pacemaker.last_commited_view, 0);
+
+        let qc = QuorumCertificate::mock(7);
+        pacemaker.set_last_committed_view(&qc);
+        assert_eq!(pacemaker.last_commited_view, 7);
     }
 }

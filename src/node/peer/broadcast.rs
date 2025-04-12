@@ -6,20 +6,16 @@ use futures::future::join_all;
 use crate::{
     hotstuff::message::HotStuffMessage,
     message_protocol::{send_message, send_transaction},
-    node::state::{Node, PeerId, PeerSocket},
+    node::state::{Node, PeerId},
     types::{Message, Transaction},
 };
 
 /// Broadcast msg to all peer connections
-
 pub(crate) async fn broadcast_hotstuff_message(
     node: &Arc<Node>,
     msg: HotStuffMessage,
 ) -> Result<()> {
-    let peer_connections: Vec<Arc<PeerSocket>> = {
-        let peer_connections = node.peer_connections.read().await;
-        peer_connections.values().cloned().collect()
-    };
+    let peer_connections = node.get_peer_connections_as_vec().await;
 
     for peer_socket in peer_connections {
         let cloned_msg = msg.clone();
@@ -51,10 +47,7 @@ pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: Transaction) -> 
     let id = node.id;
     let logger = &node.logger.clone();
 
-    let peer_connections: Vec<Arc<PeerSocket>> = {
-        let peer_connections = node.peer_connections.read().await;
-        peer_connections.values().cloned().collect()
-    };
+    let peer_connections = node.get_peer_connections_as_vec().await;
 
     let mut tasks = Vec::new();
 

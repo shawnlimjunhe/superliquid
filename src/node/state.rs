@@ -39,3 +39,12 @@ pub struct Node {
     pub(super) peer_connections: RwLock<HashMap<PeerId, Arc<PeerSocket>>>, // For now, we skip peer discovery
     pub(super) logger: Arc<dyn Logger>,
 }
+
+impl Node {
+    pub(crate) async fn get_peer_connections_as_vec(&self) -> Vec<Arc<PeerSocket>> {
+        {
+            let peer_connections = self.peer_connections.read().await;
+            peer_connections.values().cloned().collect()
+        }
+    }
+}
