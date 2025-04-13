@@ -296,7 +296,7 @@ impl HotStuffReplica {
         // wait for (n - f) votes
         if !utils::has_quorum_for_view(
             &self.messages,
-            self.pacemaker.curr_view,
+            self.pacemaker.curr_view - 1,
             self.quorum_threshold(),
             HotStuffMessageType::NewView,
         ) {
@@ -599,6 +599,8 @@ impl HotStuffReplica {
         let Some(outbound_msg) = outbound_msg else {
             return Ok(());
         };
+
+        replica_log!(self.node_id, "Sending outbound message: {:?}", outbound_msg);
 
         if is_leader {
             self.node_sender
