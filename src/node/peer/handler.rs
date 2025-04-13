@@ -97,11 +97,7 @@ pub(super) async fn handle_peer_connection(
             }
             Err(e) => {
                 // log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
-                // {
-                //     let mut peer_connections = node.peer_connections.lock().await;
-                //     peer_connections.remove(&peer_id);
-                //     log("info", "Closing old connection to peer");
-                // }
+
                 return Err(e);
                 // sleep(time::Duration::from_millis(500)).await;
 

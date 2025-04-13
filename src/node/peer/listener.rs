@@ -5,13 +5,25 @@ use tokio::sync::Mutex;
 use tokio::{net::TcpListener, sync::mpsc};
 
 use crate::node::peer::handler::handle_handshake;
-use crate::node::state::PeerSocket;
+use crate::node::state::{PeerId, PeerSocket};
 use crate::{
     node::{
         peer::handler::handle_peer_connection, runner::deduplicate_peer_connection, state::Node,
     },
     types::ReplicaInBound,
 };
+
+async fn drop_peer_socket(node: Arc<Node>, peer_id: PeerId) {
+    let logger = node.logger.clone();
+    {
+        let mut peer_connections = node.peer_connections.write().await;
+        peer_connections.remove(&peer_id);
+    }
+    logger.log(
+        "Info",
+        &format!("Dropping peer connection to peer: {:?}", peer_id),
+    );
+}
 
 /// peer listener handles the consensus layer communication
 pub(crate) async fn run_peer_listener(
@@ -54,6 +66,9 @@ pub(crate) async fn run_peer_listener(
                 Ok(()) => logger.log("info", "Successfully handled peer connection"),
                 Err(e) => logger.log("Error", &format!("Peer listener: Failed due to: {:?}", e)),
             }
+
+            // drop the peerSocket after the connection has ended
+            drop_peer_socket(node_clone, peer_id).await;
         });
     }
 }
