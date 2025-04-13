@@ -88,7 +88,13 @@ pub(super) async fn handle_peer_connection(
                 }
                 _ => {}
             },
-            Ok(None) => logger.log("Error", "Expected message, but got none"),
+            Ok(None) => {
+                logger.log("Error", "Expected message, but got none");
+                return Err(Error::new(
+                    ErrorKind::BrokenPipe,
+                    "Expected message but got None instead",
+                ));
+            }
             Err(e) => {
                 // log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
                 // {

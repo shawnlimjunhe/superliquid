@@ -257,7 +257,7 @@ impl HotStuffReplica {
     }
 
     pub fn update_view(&mut self, incoming_view: ViewNumber) {
-        self.pacemaker.set_view(incoming_view);
+        self.pacemaker.fast_forward_view(incoming_view);
     }
 
     fn create_cmd(&mut self) -> ClientCommand {
@@ -531,11 +531,18 @@ impl HotStuffReplica {
         Ok(())
     }
 
+    fn sync_view(&mut self, msg: &HotStuffMessage) {
+        let incoming_view = msg.view_number;
+        self.pacemaker.fast_forward_view(incoming_view);
+    }
+
     async fn handle_new_view(
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.sync_view(&msg);
         self.pacemaker.reset_timer();
+
         self.handle_message(
             msg,
             |s, _| s.leader_prepare(),
@@ -548,6 +555,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.sync_view(&msg);
         self.pacemaker.reset_timer();
         self.handle_message(
             msg,
@@ -561,6 +569,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.sync_view(&msg);
         self.pacemaker.reset_timer();
         self.handle_message(msg, |s, _| s.leader_commit(), |s, m| s.replica_commit(&m))
             .await
@@ -570,6 +579,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        self.sync_view(&msg);
         self.pacemaker.reset_timer();
         self.handle_message(msg, |s, _| s.leader_decide(), |s, m| s.replica_decide(&m))
             .await

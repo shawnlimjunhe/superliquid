@@ -53,10 +53,15 @@ impl Pacemaker {
         self.last_view_change = Instant::now();
     }
 
-    pub(crate) fn set_view(&mut self, incoming_view: ViewNumber) {
+    pub(crate) fn fast_forward_view(&mut self, incoming_view: ViewNumber) {
         if incoming_view <= self.curr_view {
             return;
         }
+        pacemaker_log!(
+            "Fast forwarding view from {:?} to {:?}",
+            self.curr_view,
+            incoming_view
+        );
         self.curr_view = incoming_view;
         self.last_view_change = Instant::now();
     }
@@ -122,7 +127,7 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10)); // Let time pass
 
-        pacemaker.set_view(10); // Should update view and reset timer
+        pacemaker.fast_forward_view(10); // Should update view and reset timer
 
         assert_eq!(pacemaker.curr_view, 10);
         assert!(pacemaker.last_view_change > before);
@@ -137,7 +142,7 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10)); // Let time pass
 
-        pacemaker.set_view(6); // Should NOT update or reset
+        pacemaker.fast_forward_view(6); // Should NOT update or reset
 
         assert_eq!(pacemaker.curr_view, 8);
         assert_eq!(pacemaker.last_view_change, before);
