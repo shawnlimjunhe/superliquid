@@ -82,6 +82,8 @@ impl Pacemaker {
 
 #[cfg(test)]
 mod tests {
+    use crate::hotstuff::message::HotStuffMessageType;
+
     use super::*;
     use std::thread::sleep;
 
@@ -205,7 +207,7 @@ mod tests {
         let mut pacemaker = Pacemaker::new();
         assert_eq!(pacemaker.last_commited_view, 0);
 
-        let qc = QuorumCertificate::mock(7);
+        let qc = QuorumCertificate::mock(7, HotStuffMessageType::Commit);
         pacemaker.set_last_committed_view(&qc);
         assert_eq!(pacemaker.last_commited_view, 7);
     }

@@ -93,13 +93,14 @@ impl Block {
         }
     }
 
-    pub fn create_genesis_block() -> Block {
+    pub fn create_genesis_block() -> (Block, QuorumCertificate) {
         let qc = crypto::QuorumCertificate::create_genesis_qc();
 
-        Block::Genesis {
+        let genesis = Block::Genesis {
             cmd: ClientCommand::create_empty_command(),
             view_number: 0,
-            justify: qc,
-        }
+            justify: qc.clone(),
+        };
+        return (genesis, qc);
     }
 }

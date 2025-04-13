@@ -38,19 +38,23 @@ impl PartialSig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QuorumCertificate {
-    pub message_type: HotStuffMessageType,
-    pub view_number: ViewNumber,
-    pub block_hash: BlockHash,
-    message_hash: Sha256Hash,
-    partial_sigs: Vec<PartialSig>,
+    pub(crate) message_type: HotStuffMessageType,
+    pub(crate) view_number: ViewNumber,
+    pub(crate) block_hash: BlockHash,
+    pub(crate) message_hash: Sha256Hash,
+    pub(crate) partial_sigs: Vec<PartialSig>,
 }
 
 impl QuorumCertificate {
     pub fn create_genesis_qc() -> QuorumCertificate {
+        const GENESIS_BLOCK_HASH: [u8; 32] = [
+            144, 17, 49, 216, 56, 177, 122, 172, 15, 120, 133, 184, 30, 3, 203, 220, 159, 81, 87,
+            160, 3, 67, 211, 10, 178, 32, 131, 104, 94, 209, 65, 106,
+        ];
         QuorumCertificate {
             message_type: HotStuffMessageType::Commit,
             view_number: 0,
-            block_hash: [0u8; 32],
+            block_hash: GENESIS_BLOCK_HASH,
             message_hash: [0u8; 32],
             partial_sigs: vec![],
         }
@@ -115,7 +119,7 @@ mod tests {
     use crate::{
         hotstuff::{
             crypto::PartialSig,
-            message::{self, HotStuffMessage, HotStuffMessageType},
+            message::{HotStuffMessage, HotStuffMessageType},
             replica::ViewNumber,
         },
         types::Sha256Hash,
@@ -124,9 +128,9 @@ mod tests {
     use super::QuorumCertificate;
 
     impl QuorumCertificate {
-        pub fn mock(view_number: ViewNumber) -> Self {
+        pub fn mock(view_number: ViewNumber, message_type: HotStuffMessageType) -> Self {
             QuorumCertificate {
-                message_type: HotStuffMessageType::Prepare,
+                message_type,
                 view_number,
                 block_hash: [0u8; 32],
                 message_hash: [0u8; 32],
@@ -140,7 +144,13 @@ mod tests {
         let qc = QuorumCertificate::create_genesis_qc();
         assert_eq!(qc.view_number, 0);
         assert_eq!(qc.message_type, HotStuffMessageType::Commit);
-        assert_eq!(qc.block_hash, [0u8; 32]);
+        assert_eq!(
+            qc.block_hash,
+            [
+                144, 17, 49, 216, 56, 177, 122, 172, 15, 120, 133, 184, 30, 3, 203, 220, 159, 81,
+                87, 160, 3, 67, 211, 10, 178, 32, 131, 104, 94, 209, 65, 106,
+            ]
+        );
         assert_eq!(qc.message_hash, [0u8; 32]);
         assert!(qc.partial_sigs.is_empty());
     }
