@@ -127,4 +127,4 @@ This project is licensed under the [MIT License](LICENSE). You’re free to modi
 
 ---
 
-**Disclaimer**: This is an educational project to explore a HotStuff-based BFT consensus mechanism in Rust. It is *not* production-ready for mission-critical use.
+**Disclaimer**: This is an educational project to explore a HotStuff-based BFT consensus mechanism in Rust. It is *not* production-ready.
