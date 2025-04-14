@@ -1,4 +1,4 @@
-use crate::{node::state::PeerId, types::Sha256Hash};
+use crate::types::Sha256Hash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

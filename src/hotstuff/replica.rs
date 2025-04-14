@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::{
@@ -31,10 +34,10 @@ pub struct HotStuffReplica {
     pub validator_set: HashSet<VerifyingKey>,
     signing_key: SigningKey,
 
-    locked_qc: QuorumCertificate,
-    prepare_qc: QuorumCertificate,
-    precommit_qc: Option<QuorumCertificate>,
-    commit_qc: Option<QuorumCertificate>,
+    locked_qc: Arc<QuorumCertificate>,
+    prepare_qc: Arc<QuorumCertificate>,
+    precommit_qc: Option<Arc<QuorumCertificate>>,
+    commit_qc: Option<Arc<QuorumCertificate>>,
     current_proposal: Option<Block>,
     blockstore: HashMap<BlockHash, Block>,
     mempool: Vec<Transaction>,
@@ -56,6 +59,7 @@ impl HotStuffReplica {
         let mut blockstore: HashMap<BlockHash, Block> = HashMap::new();
         blockstore.insert(genesis_block.hash(), genesis_block.clone());
 
+        let genesis_qc = Arc::new(genesis_qc);
         HotStuffReplica {
             node_id,
             validator_set: config::retrieve_validator_set(),
@@ -289,7 +293,7 @@ impl HotStuffReplica {
 
         replica_log!(
             self.node_id,
-            "Leader prepare, view num: {:?}",
+            "Leader handle new view (Prepare), view num: {:?}",
             self.pacemaker.curr_view
         );
 
@@ -360,6 +364,8 @@ impl HotStuffReplica {
                 replica_debug!(self.node_id, "qc is not valid: r prep");
                 return None;
             }
+
+            let msg_justify_qc = Arc::new(msg_justify_qc);
 
             self.prepare_qc = msg_justify_qc.clone();
             let Some(node) = self.blockstore.get(&msg_justify_qc.block_hash) else {
@@ -444,12 +450,14 @@ impl HotStuffReplica {
             return None;
         };
 
+        let qc = Arc::new(qc);
+
         self.prepare_qc = qc.clone();
         replica_debug!(self.node_id, "Sucess: L prep");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::PreCommit,
             None,
-            Some(qc),
+            Some((*qc).clone()),
             self.pacemaker.curr_view,
         ));
     }
@@ -487,18 +495,20 @@ impl HotStuffReplica {
             return None;
         };
 
+        let qc = Arc::new(qc);
+
         self.precommit_qc = Some(qc.clone());
 
         replica_debug!(self.node_id, "Success: l precom");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Commit,
             None,
-            Some(qc),
+            Some((*qc).clone()),
             self.pacemaker.curr_view,
         ));
     }
 
-    pub fn replica_handle_precommit(&mut self, msg: &HotStuffMessage) -> Option<HotStuffMessage> {
+    pub fn replica_handle_precommit(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
             "Replica handle precommit (Commit phase), view num: {:?}",
@@ -530,6 +540,8 @@ impl HotStuffReplica {
             return None;
         };
 
+        let qc = Arc::new(qc);
+
         self.locked_qc = qc.clone();
         self.pacemaker.set_last_committed_view(&qc);
 
@@ -559,7 +571,7 @@ impl HotStuffReplica {
             self.quorum_threshold(),
             HotStuffMessageType::Commit,
         ) {
-            replica_debug!(self.node_id, "Waiting for n-f: l precom");
+            replica_debug!(self.node_id, "Waiting for n-f: l comm");
             return None;
         }
 
@@ -576,6 +588,7 @@ impl HotStuffReplica {
             return None;
         };
 
+        let qc = Arc::new(qc);
         self.commit_qc = Some(qc.clone());
         self.pacemaker.set_last_committed_view(&qc);
 
@@ -584,12 +597,12 @@ impl HotStuffReplica {
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Decide,
             None,
-            Some(qc),
+            Some((*qc).clone()),
             self.pacemaker.curr_view,
         ));
     }
 
-    pub fn replica_handle_commit(&mut self, msg: &HotStuffMessage) -> Option<HotStuffMessage> {
+    pub fn replica_handle_commit(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
             "Replica Decide, view num: {:?}",
@@ -617,7 +630,7 @@ impl HotStuffReplica {
             message_type: HotStuffMessageType::NewView,
             view_number: self.pacemaker.curr_view - 1, // view number should be from prev view
             node: None,
-            justify: Some(self.prepare_qc.clone()),
+            justify: Some((*self.prepare_qc).clone()),
             partial_sig: None,
         }
     }
@@ -629,16 +642,16 @@ impl HotStuffReplica {
         replica_handler: FReplica,
     ) -> Result<(), SendError<ReplicaOutbound>>
     where
-        FLeader: FnOnce(&mut Self, &HotStuffMessage) -> Option<HotStuffMessage>,
-        FReplica: FnOnce(&mut Self, &HotStuffMessage) -> Option<HotStuffMessage>,
+        FLeader: FnOnce(&mut Self, HotStuffMessage) -> Option<HotStuffMessage>,
+        FReplica: FnOnce(&mut Self, HotStuffMessage) -> Option<HotStuffMessage>,
     {
         let leader = self.pacemaker.current_leader();
         let is_leader = self.node_id == leader;
 
         let outbound_msg = if is_leader {
-            leader_handler(self, &msg)
+            leader_handler(self, msg)
         } else {
-            replica_handler(self, &msg)
+            replica_handler(self, msg)
         };
 
         let Some(outbound_msg) = outbound_msg else {
@@ -680,8 +693,8 @@ impl HotStuffReplica {
         self.sync_view(&msg);
         self.handle_message(
             msg,
-            |s, m| s.leader_handle_new_view(m.clone()),
-            |s, m| s.replica_handle_new_view(m.clone()),
+            |s, m| s.leader_handle_new_view(m),
+            |s, m| s.replica_handle_new_view(m),
         )
         .await
     }
@@ -702,8 +715,8 @@ impl HotStuffReplica {
         self.sync_view(&msg);
         self.handle_message(
             msg,
-            |s, m| s.leader_handle_prepare(m.clone()),
-            |s, m| s.replica_handle_prepare(m.clone()),
+            |s, m| s.leader_handle_prepare(m),
+            |s, m| s.replica_handle_prepare(m),
         )
         .await
     }
@@ -724,8 +737,8 @@ impl HotStuffReplica {
         self.sync_view(&msg);
         self.handle_message(
             msg,
-            |s, m| s.leader_handle_precommit(m.clone()),
-            |s, m| s.replica_handle_precommit(&m),
+            |s, m| s.leader_handle_precommit(m),
+            |s, m| s.replica_handle_precommit(m),
         )
         .await
     }
@@ -747,8 +760,8 @@ impl HotStuffReplica {
         self.sync_view(&msg);
         self.handle_message(
             msg,
-            |s, m| s.leader_handle_commit(m.clone()),
-            |s, m| s.replica_handle_commit(&m),
+            |s, m| s.leader_handle_commit(m),
+            |s, m| s.replica_handle_commit(m),
         )
         .await
     }
@@ -782,7 +795,6 @@ impl HotStuffReplica {
             // Refresh pacemaker timer dynamically each loop
             let time_remaining = self.pacemaker.time_remaining();
             let pacemaker_timer = sleep(time_remaining);
-            // replica_debug!(self.node_id, "Sleeping for: {:?}", time_remaining);
             pin!(pacemaker_timer);
 
             tokio::select! {
@@ -794,7 +806,6 @@ impl HotStuffReplica {
                     if self.pacemaker.should_advance_view() {
 
                         let outbound_msg = self.advance_and_create_new_view();
-
                         let leader = self.pacemaker.current_leader();
                         self.node_sender
                             .send(ReplicaOutbound::SendTo(leader, outbound_msg))
