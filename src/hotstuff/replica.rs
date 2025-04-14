@@ -10,7 +10,7 @@ use tokio::{
 use crate::{
     config,
     hotstuff::utils,
-    replica_log,
+    replica_debug, replica_log,
     types::{ReplicaInBound, ReplicaOutbound, Transaction},
 };
 
@@ -254,10 +254,6 @@ impl HotStuffReplica {
         extends || newer_qc
     }
 
-    pub fn update_view(&mut self, incoming_view: ViewNumber) {
-        self.pacemaker.fast_forward_view(incoming_view);
-    }
-
     fn create_cmd(&mut self) -> ClientCommand {
         let transactions: Vec<Transaction> = self.mempool.iter().cloned().take(1).collect();
 
@@ -278,14 +274,18 @@ impl HotStuffReplica {
 
     // hot stuff phases
 
-    pub fn leader_handle_new_view(&mut self) -> Option<HotStuffMessage> {
+    pub fn leader_handle_new_view(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
+        // move this
+        let cmd: &ClientCommand = &self.create_cmd();
+
+        self.push_message_to_correct_view(msg.clone());
+        self.pacemaker.reset_timer();
+
         let votes = &self
             .messages
             .entry(self.pacemaker.curr_view - 1)
             .or_default()
             .clone();
-
-        let cmd: &ClientCommand = &self.create_cmd();
 
         replica_log!(
             self.node_id,
@@ -300,17 +300,20 @@ impl HotStuffReplica {
             self.quorum_threshold(),
             HotStuffMessageType::NewView,
         ) {
+            replica_debug!(self.node_id, "waiting for n-f votes: L new_view");
             return None;
         }
 
         let Some(high_qc) = utils::get_highest_qc_from_votes(self.pacemaker.curr_view, votes)
         else {
             // no valid QC from previous view
+            replica_debug!(self.node_id, "no valid QC from prev view: L new view");
             return None;
         };
 
         let Some(parent) = self.blockstore.get(&high_qc.block_hash) else {
             // cant find QC's block
+            replica_debug!(self.node_id, "cant find qc's block: L new view");
             return None;
         };
 
@@ -318,6 +321,7 @@ impl HotStuffReplica {
         self.blockstore.insert(new_block.hash(), new_block.clone());
 
         self.current_proposal = Some(new_block.clone());
+        replica_debug!(self.node_id, "Success: Leader new view");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Prepare,
             Some(new_block),
@@ -333,18 +337,17 @@ impl HotStuffReplica {
 
     pub fn replica_handle_prepare(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
         let Some(msg_justify_qc) = msg.justify else {
+            replica_debug!(self.node_id, "msg no justify: r prep");
             return None;
         };
-
-        if msg.view_number != self.pacemaker.curr_view {
-            return None;
-        }
 
         if Self::matching_qc(
             &msg_justify_qc,
             HotStuffMessageType::Prepare,
             self.pacemaker.curr_view,
         ) {
+            self.pacemaker.reset_timer();
+
             // In the pre-commit phase
             replica_log!(
                 self.node_id,
@@ -354,11 +357,13 @@ impl HotStuffReplica {
 
             if !msg_justify_qc.verify(&self.validator_set, self.quorum_threshold()) {
                 // qc is not valid
+                replica_debug!(self.node_id, "qc is not valid: r prep");
                 return None;
             }
 
             self.prepare_qc = msg_justify_qc.clone();
             let Some(node) = self.blockstore.get(&msg_justify_qc.block_hash) else {
+                replica_debug!(self.node_id, "couldn't retrieve block: r prep",);
                 return None;
             };
 
@@ -379,14 +384,21 @@ impl HotStuffReplica {
         );
 
         let Some(msg_node) = &msg.node else {
+            replica_debug!(self.node_id, "Couldn't get msg node: r prep");
             return None;
         };
 
         if !msg_node.extends_from(msg_justify_qc.block_hash, &self.blockstore) {
+            replica_debug!(self.node_id, "Doesn't extend: r prep");
             return None;
         }
 
+        self.blockstore.insert(msg_node.hash(), msg_node.clone());
+
+        self.pacemaker.reset_timer();
+
         if self.safe_node(msg_node, msg_justify_qc) {
+            replica_debug!(self.node_id, "Success: r prep");
             return Some(Self::vote_message(
                 &self,
                 HotStuffMessageType::Prepare,
@@ -398,12 +410,15 @@ impl HotStuffReplica {
         None
     }
 
-    pub fn leader_handle_prepare(&mut self) -> Option<HotStuffMessage> {
+    pub fn leader_handle_prepare(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
             "Leader handle prepare (Pre-commit phase), view num: {:?}",
             self.pacemaker.curr_view
         );
+
+        self.push_message_to_correct_view(msg);
+        self.pacemaker.reset_timer();
 
         // wait for (n - f) votes
         if !utils::has_quorum_for_view(
@@ -412,6 +427,7 @@ impl HotStuffReplica {
             self.quorum_threshold(),
             HotStuffMessageType::Prepare,
         ) {
+            replica_debug!(self.node_id, "Waiting for n-f votes: l prep");
             return None;
         }
 
@@ -424,10 +440,12 @@ impl HotStuffReplica {
 
         let Some(qc) = self.create_qc_from_votes(&votes, HotStuffMessageType::Prepare) else {
             // unable to form a QC
+            replica_debug!(self.node_id, "Cant form qc: L prep");
             return None;
         };
 
         self.prepare_qc = qc.clone();
+        replica_debug!(self.node_id, "Sucess: L prep");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::PreCommit,
             None,
@@ -436,12 +454,14 @@ impl HotStuffReplica {
         ));
     }
 
-    pub fn leader_handle_precommit(&mut self) -> Option<HotStuffMessage> {
+    pub fn leader_handle_precommit(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
             "Leader handle precommit (Commit phase), view num: {:?}",
             self.pacemaker.curr_view
         );
+        self.push_message_to_correct_view(msg);
+        self.pacemaker.reset_timer();
 
         // wait for (n - f) votes
         if !utils::has_quorum_for_view(
@@ -450,6 +470,7 @@ impl HotStuffReplica {
             self.quorum_threshold(),
             HotStuffMessageType::Prepare,
         ) {
+            replica_debug!(self.node_id, "Waiting for n-f: l precom");
             return None;
         }
 
@@ -461,12 +482,14 @@ impl HotStuffReplica {
         };
 
         let Some(qc) = self.create_qc_from_votes(&votes, HotStuffMessageType::PreCommit) else {
+            replica_debug!(self.node_id, "Cant form qc: l precom");
             // unable to form a QC
             return None;
         };
 
         self.precommit_qc = Some(qc.clone());
 
+        replica_debug!(self.node_id, "Success: l precom");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Commit,
             None,
@@ -488,21 +511,29 @@ impl HotStuffReplica {
 
         let Some(qc) = msg.justify.clone() else {
             // no qc to validate
+            replica_debug!(self.node_id, "no qc to validate: R precom");
             return None;
         };
 
+        self.pacemaker.reset_timer();
+
         if !qc.verify(&self.validator_set, self.quorum_threshold()) {
             // qc is not valid
+            replica_debug!(self.node_id, "qc not valid: R precom");
             return None;
         }
+
+        let Some(node) = self.blockstore.get(&qc.block_hash) else {
+            replica_debug!(self.node_id, "{:?}", self.blockstore);
+            replica_debug!(self.node_id, "{:?}", qc);
+            replica_debug!(self.node_id, "Cant get block: R precom");
+            return None;
+        };
 
         self.locked_qc = qc.clone();
         self.pacemaker.set_last_committed_view(&qc);
 
-        let Some(node) = self.blockstore.get(&qc.block_hash) else {
-            return None;
-        };
-
+        replica_debug!(self.node_id, "Success: R precom");
         return Some(Self::vote_message(
             &self,
             HotStuffMessageType::Commit,
@@ -512,12 +543,25 @@ impl HotStuffReplica {
         ));
     }
 
-    pub fn leader_handle_commit(&mut self) -> Option<HotStuffMessage> {
+    pub fn leader_handle_commit(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
             "Leader handle commit (Decide phase), view num: {:?}",
             self.pacemaker.curr_view
         );
+        self.push_message_to_correct_view(msg);
+        self.pacemaker.reset_timer();
+
+        // wait for (n - f) votes
+        if !utils::has_quorum_for_view(
+            &self.messages,
+            self.pacemaker.curr_view,
+            self.quorum_threshold(),
+            HotStuffMessageType::Commit,
+        ) {
+            replica_debug!(self.node_id, "Waiting for n-f: l precom");
+            return None;
+        }
 
         let votes = {
             self.messages
@@ -528,6 +572,7 @@ impl HotStuffReplica {
 
         let Some(qc) = self.create_qc_from_votes(&votes, HotStuffMessageType::Commit) else {
             // unable to form a QC
+            replica_debug!(self.node_id, "Cant form qc: L comm");
             return None;
         };
 
@@ -535,6 +580,7 @@ impl HotStuffReplica {
         self.pacemaker.set_last_committed_view(&qc);
 
         // do commit here
+        replica_debug!(self.node_id, "Success: L comm");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Decide,
             None,
@@ -552,6 +598,7 @@ impl HotStuffReplica {
 
         let Some(qc) = msg.justify.clone() else {
             // no qc to validate
+            replica_debug!(self.node_id, "No qc to validate: R comm");
             return None;
         };
 
@@ -559,7 +606,7 @@ impl HotStuffReplica {
             && Self::matching_qc(&qc, HotStuffMessageType::Commit, self.pacemaker.curr_view)
         {
             // do commit here
-            todo!();
+            replica_debug!(self.node_id, "Success: R comm");
         }
         None
     }
@@ -587,20 +634,16 @@ impl HotStuffReplica {
     {
         let leader = self.pacemaker.current_leader();
         let is_leader = self.node_id == leader;
-        let cloned_msg = msg.clone();
-        self.push_message_to_correct_view(msg);
 
         let outbound_msg = if is_leader {
-            leader_handler(self, &cloned_msg)
+            leader_handler(self, &msg)
         } else {
-            replica_handler(self, &cloned_msg)
+            replica_handler(self, &msg)
         };
 
         let Some(outbound_msg) = outbound_msg else {
             return Ok(());
         };
-
-        replica_log!(self.node_id, "Sending outbound message: {:?}", outbound_msg);
 
         if is_leader {
             self.node_sender
@@ -624,12 +667,20 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
-        self.sync_view(&msg);
-        self.pacemaker.reset_timer();
+        if msg.view_number + 1 < self.pacemaker.curr_view {
+            replica_debug!(
+                self.node_id,
+                "Recieved stale message from view: {:?} at curr_view{:?}",
+                msg.view_number,
+                self.pacemaker.curr_view
+            );
+            return Ok(());
+        }
 
+        self.sync_view(&msg);
         self.handle_message(
             msg,
-            |s, _| s.leader_handle_new_view(),
+            |s, m| s.leader_handle_new_view(m.clone()),
             |s, m| s.replica_handle_new_view(m.clone()),
         )
         .await
@@ -639,11 +690,19 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        if msg.view_number < self.pacemaker.curr_view {
+            replica_debug!(
+                self.node_id,
+                "Recieved stale message from view: {:?} at curr_view{:?}",
+                msg.view_number,
+                self.pacemaker.curr_view
+            );
+            return Ok(());
+        }
         self.sync_view(&msg);
-        self.pacemaker.reset_timer();
         self.handle_message(
             msg,
-            |s, _| s.leader_handle_prepare(),
+            |s, m| s.leader_handle_prepare(m.clone()),
             |s, m| s.replica_handle_prepare(m.clone()),
         )
         .await
@@ -653,11 +712,19 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        if msg.view_number < self.pacemaker.curr_view {
+            replica_debug!(
+                self.node_id,
+                "Recieved stale message from view: {:?} at curr_view{:?}",
+                msg.view_number,
+                self.pacemaker.curr_view
+            );
+            return Ok(());
+        }
         self.sync_view(&msg);
-        self.pacemaker.reset_timer();
         self.handle_message(
             msg,
-            |s, _| s.leader_handle_precommit(),
+            |s, m| s.leader_handle_precommit(m.clone()),
             |s, m| s.replica_handle_precommit(&m),
         )
         .await
@@ -667,11 +734,20 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
+        if msg.view_number < self.pacemaker.curr_view {
+            replica_debug!(
+                self.node_id,
+                "Recieved stale message from view: {:?} at curr_view{:?}",
+                msg.view_number,
+                self.pacemaker.curr_view
+            );
+            self.pacemaker.reset_timer();
+            return Ok(());
+        }
         self.sync_view(&msg);
-        self.pacemaker.reset_timer();
         self.handle_message(
             msg,
-            |s, _| s.leader_handle_commit(),
+            |s, m| s.leader_handle_commit(m.clone()),
             |s, m| s.replica_handle_commit(&m),
         )
         .await
@@ -706,6 +782,7 @@ impl HotStuffReplica {
             // Refresh pacemaker timer dynamically each loop
             let time_remaining = self.pacemaker.time_remaining();
             let pacemaker_timer = sleep(time_remaining);
+            // replica_debug!(self.node_id, "Sleeping for: {:?}", time_remaining);
             pin!(pacemaker_timer);
 
             tokio::select! {

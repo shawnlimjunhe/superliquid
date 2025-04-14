@@ -36,6 +36,11 @@ impl Pacemaker {
     pub(crate) fn get_current_timeout(&self) -> Duration {
         let failed_views = self.curr_view - self.last_commited_view;
         let base: u32 = 2;
+        // pacemaker_log!(
+        //     "Last commited view: {:?}, failed views {:?}",
+        //     self.last_commited_view,
+        //     failed_views
+        // );
         self.base_timeout * base.pow(failed_views as u32)
     }
 

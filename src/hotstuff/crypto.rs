@@ -69,6 +69,8 @@ impl QuorumCertificate {
             None => [0; 32],
         };
 
+        println!("creating qc with blockhash: {:?}", block_hash);
+
         let view_number = first_vote.view_number;
         let message_type = first_vote.message_type.clone();
 
