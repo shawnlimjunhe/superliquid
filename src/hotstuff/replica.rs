@@ -1,4 +1,5 @@
 use std::{
+    cmp::max,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
@@ -260,9 +261,35 @@ impl HotStuffReplica {
         self.push_message_to_correct_view(msg.clone());
         self.pacemaker.reset_timer();
 
+        if !utils::has_quorum_for_view(
+            &self.messages,
+            self.pacemaker.curr_view,
+            self.quorum_threshold(),
+        ) {
+            replica_debug!(
+                self.node_id,
+                "waiting for quorum (n - f): view {:?}",
+                self.pacemaker.curr_view
+            );
+            return None;
+        }
+
+        let votes = &self
+            .messages
+            .entry(self.pacemaker.curr_view)
+            .or_default()
+            .clone();
+
+        let qc = self.create_qc_from_votes(votes);
+
+        match qc {
+            Some(qc) => self.generic_qc = Arc::new(qc),
+            None => {}
+        }
+
         let votes_prev_view = &self
             .messages
-            .entry(self.pacemaker.curr_view - 1)
+            .entry(max(self.pacemaker.curr_view - 1, 0))
             .or_default()
             .clone();
 
@@ -418,6 +445,7 @@ impl HotStuffReplica {
         }
 
         replica_log!(self.node_id, "Commit success on view: {:?}", curr_view);
+        // do commit here
 
         return outbound_msg;
     }
