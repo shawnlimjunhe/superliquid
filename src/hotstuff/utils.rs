@@ -10,7 +10,6 @@ pub fn get_highest_qc_from_votes<'a>(
     curr_view: ViewNumber,
     votes: &'a Vec<HotStuffMessage>,
 ) -> Option<&'a QuorumCertificate> {
-    println!("votes: {:?}", votes);
     votes
         .iter()
         .filter_map(|msg| match msg.message_type {

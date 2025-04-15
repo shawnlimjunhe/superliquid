@@ -127,7 +127,11 @@ impl HotStuffReplica {
         message_type: HotStuffMessageType,
         view_number: ViewNumber,
     ) -> bool {
-        qc.message_type == message_type && qc.view_number == view_number
+        if qc.message_type == message_type && qc.view_number == view_number {
+            println!("qc: {:?}", qc);
+            return true;
+        }
+        false
     }
 
     fn quorum_threshold(&self) -> usize {
@@ -335,7 +339,7 @@ impl HotStuffReplica {
     }
 
     pub fn replica_handle_new_view(&self, _msg: HotStuffMessage) -> Option<HotStuffMessage> {
-        // Replicas dont nothing for new_view
+        // Replicas shouldn't get a new view
         return None;
     }
 
@@ -361,7 +365,7 @@ impl HotStuffReplica {
 
             if !msg_justify_qc.verify(&self.validator_set, self.quorum_threshold()) {
                 // qc is not valid
-                replica_debug!(self.node_id, "qc is not valid: r prep");
+                replica_debug!(self.node_id, "qc is not valid: r prep - precomm");
                 return None;
             }
 
@@ -369,10 +373,11 @@ impl HotStuffReplica {
 
             self.prepare_qc = msg_justify_qc.clone();
             let Some(node) = self.blockstore.get(&msg_justify_qc.block_hash) else {
-                replica_debug!(self.node_id, "couldn't retrieve block: r prep",);
+                replica_debug!(self.node_id, "couldn't retrieve block: r prep - precomm",);
                 return None;
             };
 
+            replica_debug!(self.node_id, "Success: R prep - precomm",);
             return Some(Self::vote_message(
                 &self,
                 HotStuffMessageType::PreCommit,
@@ -453,7 +458,7 @@ impl HotStuffReplica {
         let qc = Arc::new(qc);
 
         self.prepare_qc = qc.clone();
-        replica_debug!(self.node_id, "Sucess: L prep");
+        replica_debug!(self.node_id, "Success: L prep");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::PreCommit,
             None,
@@ -478,7 +483,7 @@ impl HotStuffReplica {
             self.quorum_threshold(),
             HotStuffMessageType::Prepare,
         ) {
-            replica_debug!(self.node_id, "Waiting for n-f: l precom");
+            replica_debug!(self.node_id, "Waiting for n-f: L precom");
             return None;
         }
 
@@ -490,7 +495,7 @@ impl HotStuffReplica {
         };
 
         let Some(qc) = self.create_qc_from_votes(&votes, HotStuffMessageType::PreCommit) else {
-            replica_debug!(self.node_id, "Cant form qc: l precom");
+            replica_debug!(self.node_id, "Cant form qc: L precom");
             // unable to form a QC
             return None;
         };
@@ -499,7 +504,7 @@ impl HotStuffReplica {
 
         self.precommit_qc = Some(qc.clone());
 
-        replica_debug!(self.node_id, "Success: l precom");
+        replica_debug!(self.node_id, "Success: L precom");
         return Some(HotStuffMessage::new(
             HotStuffMessageType::Commit,
             None,
@@ -514,10 +519,6 @@ impl HotStuffReplica {
             "Replica handle precommit (Commit phase), view num: {:?}",
             self.pacemaker.curr_view
         );
-
-        if msg.view_number != self.pacemaker.curr_view {
-            return None;
-        }
 
         let Some(qc) = msg.justify.clone() else {
             // no qc to validate
@@ -602,10 +603,13 @@ impl HotStuffReplica {
         ));
     }
 
-    pub fn replica_handle_commit(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
+    pub fn replica_handle_commit_decide(
+        &mut self,
+        msg: HotStuffMessage,
+    ) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
-            "Replica Decide, view num: {:?}",
+            "Replica handle commit & decide, view num: {:?}",
             self.pacemaker.curr_view
         );
 
@@ -621,6 +625,11 @@ impl HotStuffReplica {
             // do commit here
             replica_debug!(self.node_id, "Success: R comm");
         }
+        None
+    }
+
+    pub fn leader_handle_decide(&mut self, _msg: HotStuffMessage) -> Option<HotStuffMessage> {
+        // leaders shouldn't get a decide
         None
     }
 
@@ -754,14 +763,36 @@ impl HotStuffReplica {
                 msg.view_number,
                 self.pacemaker.curr_view
             );
-            self.pacemaker.reset_timer();
+            return Ok(());
+        }
+        self.pacemaker.reset_timer();
+        self.sync_view(&msg);
+        self.handle_message(
+            msg,
+            |s, m| s.leader_handle_commit(m),
+            |s, m| s.replica_handle_commit_decide(m),
+        )
+        .await
+    }
+
+    async fn handle_decide(
+        &mut self,
+        msg: HotStuffMessage,
+    ) -> Result<(), SendError<ReplicaOutbound>> {
+        if msg.view_number < self.pacemaker.curr_view {
+            replica_debug!(
+                self.node_id,
+                "Recieved stale message from view: {:?} at curr_view{:?}",
+                msg.view_number,
+                self.pacemaker.curr_view
+            );
             return Ok(());
         }
         self.sync_view(&msg);
         self.handle_message(
             msg,
-            |s, m| s.leader_handle_commit(m),
-            |s, m| s.replica_handle_commit(m),
+            |s, m| s.leader_handle_decide(m),
+            |s, m| s.replica_handle_commit_decide(m),
         )
         .await
     }
@@ -776,6 +807,7 @@ impl HotStuffReplica {
                 HotStuffMessageType::Prepare => self.handle_prepare(hotstuff_msg).await,
                 HotStuffMessageType::PreCommit => self.handle_precommit(hotstuff_msg).await,
                 HotStuffMessageType::Commit => self.handle_commit(hotstuff_msg).await,
+                HotStuffMessageType::Decide => self.handle_decide(hotstuff_msg).await,
                 _ => Ok(()),
             },
             ReplicaInBound::Transaction(tx) => {
