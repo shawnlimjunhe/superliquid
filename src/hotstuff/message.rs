@@ -1,51 +1,44 @@
-use crate::types::Sha256Hash;
+use crate::{node::state::PeerId, types::Sha256Hash};
+use ed25519::Signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
     block::{Block, BlockHash},
     crypto::{PartialSig, QuorumCertificate},
+    hexstring,
     replica::ViewNumber,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub enum HotStuffMessageType {
-    NewView,
-    Prepare,
-    PreCommit,
-    Commit,
-    Decide,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HotStuffMessage {
-    pub message_type: HotStuffMessageType,
     pub view_number: ViewNumber,
     pub node: Option<Block>,
     pub justify: Option<QuorumCertificate>,
     pub partial_sig: Option<PartialSig>,
+
+    pub sender: PeerId,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct HashableMessage {
-    message_type: HotStuffMessageType,
     view_number: ViewNumber,
     block_hash: BlockHash,
 }
 
 impl HotStuffMessage {
     pub fn new(
-        message_type: HotStuffMessageType,
         node: Option<Block>,
         option_qc: Option<QuorumCertificate>,
         curr_view: ViewNumber,
+        sender: PeerId,
     ) -> Self {
         Self {
-            message_type,
             view_number: curr_view,
             node,
             justify: option_qc,
             partial_sig: None,
+            sender,
         }
     }
 
@@ -55,7 +48,6 @@ impl HotStuffMessage {
             None => [0; 32],
         };
         let hashable = HashableMessage {
-            message_type: self.message_type.clone(),
             view_number: self.view_number,
             block_hash,
         };

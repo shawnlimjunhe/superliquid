@@ -5,12 +5,7 @@ use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    block::BlockHash,
-    hexstring,
-    message::{HotStuffMessage, HotStuffMessageType},
-    replica::ViewNumber,
-};
+use super::{block::BlockHash, hexstring, message::HotStuffMessage, replica::ViewNumber};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PartialSig {
@@ -38,7 +33,6 @@ impl PartialSig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QuorumCertificate {
-    pub(crate) message_type: HotStuffMessageType,
     pub(crate) view_number: ViewNumber,
     pub(crate) block_hash: BlockHash,
     pub(crate) message_hash: Sha256Hash,
@@ -52,7 +46,6 @@ impl QuorumCertificate {
             160, 3, 67, 211, 10, 178, 32, 131, 104, 94, 209, 65, 106,
         ];
         QuorumCertificate {
-            message_type: HotStuffMessageType::Commit,
             view_number: 0,
             block_hash: GENESIS_BLOCK_HASH,
             message_hash: [0u8; 32],
@@ -70,12 +63,10 @@ impl QuorumCertificate {
         };
 
         let view_number = first_vote.view_number;
-        let message_type = first_vote.message_type.clone();
 
         let sigs = votes.iter().filter_map(|v| v.partial_sig.clone()).collect();
 
         Some(QuorumCertificate {
-            message_type,
             view_number,
             block_hash,
             message_hash: first_vote.hash(),
@@ -117,20 +108,15 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use crate::{
-        hotstuff::{
-            crypto::PartialSig,
-            message::{HotStuffMessage, HotStuffMessageType},
-            replica::ViewNumber,
-        },
+        hotstuff::{crypto::PartialSig, message::HotStuffMessage, replica::ViewNumber},
         types::Sha256Hash,
     };
 
     use super::QuorumCertificate;
 
     impl QuorumCertificate {
-        pub fn mock(view_number: ViewNumber, message_type: HotStuffMessageType) -> Self {
+        pub fn mock(view_number: ViewNumber) -> Self {
             QuorumCertificate {
-                message_type,
                 view_number,
                 block_hash: [0u8; 32],
                 message_hash: [0u8; 32],
@@ -143,7 +129,6 @@ mod tests {
     fn test_create_genesis_qc_defaults() {
         let qc = QuorumCertificate::create_genesis_qc();
         assert_eq!(qc.view_number, 0);
-        assert_eq!(qc.message_type, HotStuffMessageType::Commit);
         assert_eq!(
             qc.block_hash,
             [
@@ -165,17 +150,16 @@ mod tests {
         let partial_sig = PartialSig::new(public_key, signature);
 
         let vote = HotStuffMessage {
-            message_type: HotStuffMessageType::Prepare,
             view_number: 1,
             node: None,
             justify: None,
             partial_sig: Some(partial_sig.clone()),
+            sender: 1,
         };
 
         let qc = QuorumCertificate::from_votes_unchecked(&vec![vote]).unwrap();
 
         assert_eq!(qc.view_number, 1);
-        assert_eq!(qc.message_type, HotStuffMessageType::Prepare);
         assert_eq!(qc.partial_sigs.len(), 1);
         assert_eq!(
             qc.partial_sigs[0].signer_id.to_bytes(),
@@ -208,7 +192,6 @@ mod tests {
         ];
 
         let qc = QuorumCertificate {
-            message_type: HotStuffMessageType::Commit,
             view_number: 5,
             block_hash: [3u8; 32],
             message_hash,
@@ -241,7 +224,6 @@ mod tests {
         let partials = vec![PartialSig::new(pk1, sig1), PartialSig::new(pk2, sig2)];
 
         let qc = QuorumCertificate {
-            message_type: HotStuffMessageType::PreCommit,
             view_number: 2,
             block_hash: [11u8; 32],
             message_hash: wrong_message,

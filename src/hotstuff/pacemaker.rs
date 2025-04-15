@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::{config, pacemaker_log};
 
@@ -44,7 +47,7 @@ impl Pacemaker {
         self.base_timeout * base.pow(failed_views as u32)
     }
 
-    pub(crate) fn set_last_committed_view(&mut self, qc: &QuorumCertificate) {
+    pub(crate) fn set_last_committed_view(&mut self, qc: Arc<QuorumCertificate>) {
         self.last_commited_view = qc.view_number;
     }
 
@@ -75,6 +78,10 @@ impl Pacemaker {
         self.replica_ids[(self.curr_view as usize) % self.replica_ids.len()]
     }
 
+    pub(crate) fn get_leader_for_view(&self, incoming_view: ViewNumber) -> usize {
+        self.replica_ids[(incoming_view as usize) % self.replica_ids.len()]
+    }
+
     pub(crate) fn reset_timer(&mut self) {
         self.last_view_change = Instant::now();
     }
@@ -87,7 +94,6 @@ impl Pacemaker {
 
 #[cfg(test)]
 mod tests {
-    use crate::hotstuff::message::HotStuffMessageType;
 
     use super::*;
     use std::thread::sleep;
@@ -205,15 +211,5 @@ mod tests {
         std::thread::sleep(Duration::from_millis(85));
 
         assert_eq!(pacemaker.should_advance_view(), true);
-    }
-
-    #[test]
-    fn test_set_last_committed_view_updates_correctly() {
-        let mut pacemaker = Pacemaker::new();
-        assert_eq!(pacemaker.last_commited_view, 0);
-
-        let qc = QuorumCertificate::mock(7, HotStuffMessageType::Commit);
-        pacemaker.set_last_committed_view(&qc);
-        assert_eq!(pacemaker.last_commited_view, 7);
     }
 }

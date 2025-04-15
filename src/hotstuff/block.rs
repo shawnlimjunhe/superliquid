@@ -22,7 +22,7 @@ pub enum Block {
         parent_id: BlockHash,
         cmd: ClientCommand,
         view_number: ViewNumber,
-        justify: Option<QuorumCertificate>,
+        justify: QuorumCertificate,
     },
 }
 
@@ -34,12 +34,17 @@ struct HashableBlock {
 }
 
 impl Block {
-    pub fn create_leaf(parent: &Block, cmd: ClientCommand, view_number: ViewNumber) -> Self {
+    pub fn create_leaf(
+        parent: &Block,
+        cmd: ClientCommand,
+        view_number: ViewNumber,
+        justify: QuorumCertificate,
+    ) -> Self {
         return Self::Normal {
             parent_id: parent.hash(),
             cmd,
             view_number,
-            justify: None,
+            justify,
         };
     }
 
