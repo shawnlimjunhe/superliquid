@@ -23,7 +23,7 @@ A Rust implementation of a **Byzantine Fault Tolerant (BFT)** consensus protocol
 This repository implements the fundamental components of HotStuff-style consensus:
 - **Pacemaker** for handling view changes (timeouts, new-view messages, leader rotation).
 - **Peer-to-Peer Network Layer** based on `tokio` for async I/O.
-- **Replica Logic** featuring the HotStuff four-phase pipeline (Prepare, Pre-Commit, Commit, Decide).
+- **Replica Logic** featuring the chained HotStuff pipeline.
 - **Leader Rotation** using a simple round-robin approach: `leader_id = view % num_replicas`.
 - **Fault Tolerance** supporting up to `f` Byzantine nodes in a network of `3f + 1` replicas.
 
