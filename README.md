@@ -1,6 +1,6 @@
 # HotStuff-Based BFT Consensus (Work-in-Progress)
 
-A Rust implementation of a **Byzantine Fault Tolerant (BFT)** consensus protocol inspired by [HotStuff](https://arxiv.org/abs/1803.05069) and [HotStuff 2](https://arxiv.org/abs/2310.06775). This project aims to demonstrate a rotating leader scheme, peer-to-peer networking, exponential backoff for view synchronization, and the core four-phase pipeline (Prepare → Pre-Commit → Commit → Decide).
+A Rust implementation of a **Byzantine Fault Tolerant (BFT)** consensus protocol inspired by [HotStuff](https://arxiv.org/abs/1803.05069) and [HotStuff 2](https://arxiv.org/abs/2310.06775). This project aims to demonstrate a rotating leader scheme, peer-to-peer networking, exponential backoff for view synchronization, and chained hotstuff pipeline (previously core three-phase pipeline (Prepare → Pre-Commit → Commit)).
 
 > **Status**: **WIP** – feedback is welcome!
 
