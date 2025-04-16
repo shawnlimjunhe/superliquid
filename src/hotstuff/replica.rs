@@ -42,7 +42,8 @@ pub struct HotStuffReplica {
     blockstore: HashMap<BlockHash, Block>,
     mempool: Vec<Transaction>,
 
-    pub messages: HashMap<ViewNumber, Vec<HotStuffMessage>>,
+    pub message_by_view: HashMap<ViewNumber, Vec<HotStuffMessage>>,
+    pub messages: Vec<HotStuffMessage>,
     pub v_height: u128,
     pub locked_node: Option<Block>,
     pub last_exec_node: Option<Block>,
@@ -64,17 +65,22 @@ impl HotStuffReplica {
             node_id,
             validator_set: config::retrieve_validator_set(),
             signing_key,
+
             generic_qc: genesis_qc.clone(),
             locked_qc: genesis_qc,
+
             current_proposal: None,
-            messages: HashMap::new(),
             blockstore,
             mempool: vec![],
-            pacemaker: Pacemaker::new(),
+
+            message_by_view: HashMap::new(),
+            messages: vec![],
 
             v_height: 0,
             locked_node: Some(genesis_block.clone()),
             last_exec_node: Some(genesis_block),
+
+            pacemaker: Pacemaker::new(),
             node_sender,
         }
     }
@@ -94,7 +100,7 @@ impl HotStuffReplica {
     }
 
     pub fn push_message_to_correct_view(&mut self, message: HotStuffMessage) {
-        self.messages
+        self.message_by_view
             .entry(message.view_number)
             .or_default()
             .push(message);
@@ -254,15 +260,19 @@ impl HotStuffReplica {
         };
     }
 
-    pub fn leader_handle_message(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
+    pub fn leader_handle_message(&mut self) -> Option<HotStuffMessage> {
+        replica_log!(
+            self.node_id,
+            "Leader handle message at view: {:?}",
+            self.pacemaker.curr_view
+        );
         // move this
         let cmd: &ClientCommand = &self.create_cmd();
 
-        self.push_message_to_correct_view(msg.clone());
         self.pacemaker.reset_timer();
 
         if !utils::has_quorum_for_view(
-            &self.messages,
+            &self.message_by_view,
             self.pacemaker.curr_view,
             self.quorum_threshold(),
         ) {
@@ -275,7 +285,7 @@ impl HotStuffReplica {
         }
 
         let votes = &self
-            .messages
+            .message_by_view
             .entry(self.pacemaker.curr_view)
             .or_default()
             .clone();
@@ -287,27 +297,22 @@ impl HotStuffReplica {
             None => {}
         }
 
-        let votes_prev_view = &self
-            .messages
-            .entry(max(self.pacemaker.curr_view - 1, 0))
-            .or_default()
-            .clone();
-
         replica_log!(
             self.node_id,
             "Leader handle new view (Prepare), view num: {:?}",
             self.pacemaker.curr_view
         );
 
-        let Some(high_qc) = utils::get_highest_qc_from_votes(votes_prev_view) else {
-            // no valid QC from previous view
-            replica_debug!(self.node_id, "no valid QC from prev view: L");
-            return None;
+        match utils::get_highest_qc_from_votes(&self.messages) {
+            Some(high_qc) => {
+                if high_qc.view_number > self.generic_qc.view_number {
+                    self.generic_qc = Arc::new(high_qc.clone());
+                }
+            }
+            None => {
+                replica_debug!(self.node_id, "no valid QC from prev view: L");
+            } // no valid QC from previous view
         };
-
-        if high_qc.view_number > self.generic_qc.view_number {
-            self.generic_qc = Arc::new(high_qc.clone());
-        }
 
         let Some(parent) = self.blockstore.get(&self.generic_qc.block_hash) else {
             // cant find QC's block
@@ -363,8 +368,21 @@ impl HotStuffReplica {
             Block::Normal { parent_id, .. } => block_parent.hash() == *parent_id,
         }
     }
+
     pub fn replica_handle_message(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
+        replica_log!(
+            self.node_id,
+            "Replica handle message at view: {:?}",
+            self.pacemaker.curr_view
+        );
+
         if msg.sender != self.pacemaker.get_leader_for_view(msg.view_number) {
+            replica_debug!(
+                self.node_id,
+                "msg sender: {:?} is not the leader for the current view: {:?}",
+                msg.sender,
+                msg.view_number
+            );
             return None;
         }
 
@@ -399,6 +417,8 @@ impl HotStuffReplica {
 
         if is_safe && is_valid_sig {
             outbound_msg = Some(self.vote_message(&b_star, None, curr_view + 1))
+        } else {
+            return outbound_msg;
         }
 
         replica_debug!(
@@ -466,12 +486,15 @@ impl HotStuffReplica {
             );
         }
 
+        self.push_message_to_correct_view(msg.clone());
+        self.messages.push(msg.clone());
+
         let leader = self.pacemaker.current_leader();
         let is_leader = self.node_id == leader;
         let curr_view = self.pacemaker.curr_view;
 
         let outbound_msg = if is_leader {
-            self.leader_handle_message(msg)
+            self.leader_handle_message()
         } else {
             self.replica_handle_message(msg)
         };
@@ -486,6 +509,13 @@ impl HotStuffReplica {
                 .await?;
         } else {
             let next_leader = self.pacemaker.get_leader_for_view(curr_view + 1);
+            replica_log!(
+                self.node_id,
+                "Sending msg from: {:?} to: {:?}",
+                self.node_id,
+                next_leader
+            );
+
             self.node_sender
                 .send(ReplicaOutbound::SendTo(next_leader, outbound_msg))
                 .await?;

@@ -1,12 +1,10 @@
 use crate::{node::state::PeerId, types::Sha256Hash};
-use ed25519::Signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
     block::{Block, BlockHash},
     crypto::{PartialSig, QuorumCertificate},
-    hexstring,
     replica::ViewNumber,
 };
 
