@@ -107,7 +107,7 @@ You can monitor the console output to see:
 - [ ] **Client Transactions**: Allow clients to send token transfers between accounts.
 - [ ] **State Validation**: Validate balances and persist the resulting state in each committed block.
 - [ ] **Performance Tuning**: Profile and optimize message passing, QC handling, and view transitions.
-- [ ] **Chained HotStuff**: Refactor the 4-phase pipeline into a pipelined (chained) HotStuff variant for improved throughput.
+- [x] **Chained HotStuff**: Refactor the 4-phase pipeline into a pipelined (chained) HotStuff variant for improved throughput.
 - [ ] **HotStuff 2 Upgrade**: Integrate enhancements from HotStuff2, including optimistic responsiveness and speculative execution.
 - [ ] **State Persistence**: Write committed blocks and ledger state to disk.
 
