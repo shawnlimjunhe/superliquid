@@ -1,11 +1,11 @@
 use dotenv::dotenv;
-use ed25519_dalek::{ SigningKey, VerifyingKey };
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use hex::FromHex;
 use std::collections::HashSet;
 use std::env;
 use std::time::Duration;
 
-pub fn retrieve_signing_key(node_id: usize) -> SigningKey {
+pub(crate) fn retrieve_signing_key(node_id: usize) -> SigningKey {
     dotenv().ok();
     let env_key = format!("SECRET_KEY_{}", node_id);
     let sk_hex = env::var(env_key).expect("SECRET_KEY not set");
@@ -43,8 +43,7 @@ pub fn retrieve_validator_set() -> HashSet<VerifyingKey> {
 pub fn retrieve_tick_duration() -> Duration {
     dotenv().ok();
 
-    let duration_ms = env
-        ::var("TICK_DURATION")
+    let duration_ms = env::var("TICK_DURATION")
         .expect("TICK_DURATION not set")
         .parse::<u64>()
         .expect("TICK_DURATION must be a number");

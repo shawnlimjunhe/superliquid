@@ -40,14 +40,15 @@ pub struct QuorumCertificate {
 }
 
 impl QuorumCertificate {
-    pub fn create_genesis_qc() -> QuorumCertificate {
-        const GENESIS_BLOCK_HASH: [u8; 32] = [
-            144, 17, 49, 216, 56, 177, 122, 172, 15, 120, 133, 184, 30, 3, 203, 220, 159, 81, 87,
-            160, 3, 67, 211, 10, 178, 32, 131, 104, 94, 209, 65, 106,
-        ];
+    const GENESIS_BLOCK_HASH: [u8; 32] = [
+        144, 17, 49, 216, 56, 177, 122, 172, 15, 120, 133, 184, 30, 3, 203, 220, 159, 81, 87, 160,
+        3, 67, 211, 10, 178, 32, 131, 104, 94, 209, 65, 106,
+    ];
+
+    pub(crate) fn create_genesis_qc() -> QuorumCertificate {
         QuorumCertificate {
             view_number: 0,
-            block_hash: GENESIS_BLOCK_HASH,
+            block_hash: Self::GENESIS_BLOCK_HASH,
             message_hash: [0u8; 32],
             partial_sigs: vec![],
         }
@@ -78,6 +79,10 @@ impl QuorumCertificate {
         let mut unique_signers = HashSet::new();
 
         let mut valid_sig_count = 0;
+
+        if self.view_number == 0 && self.block_hash == Self::GENESIS_BLOCK_HASH {
+            return true;
+        }
 
         for sig in &self.partial_sigs {
             let pk = &sig.signer_id;

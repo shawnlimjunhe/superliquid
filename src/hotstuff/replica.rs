@@ -1,10 +1,10 @@
 use std::{
-    cmp::max,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use futures::future::pending;
 use tokio::{
     pin,
     sync::mpsc::{self, error::SendError},
@@ -44,6 +44,7 @@ pub struct HotStuffReplica {
 
     pub message_by_view: HashMap<ViewNumber, Vec<HotStuffMessage>>,
     pub messages: Vec<HotStuffMessage>,
+    pub local_queue: VecDeque<HotStuffMessage>,
     pub v_height: u128,
     pub locked_node: Option<Block>,
     pub last_exec_node: Option<Block>,
@@ -75,6 +76,7 @@ impl HotStuffReplica {
 
             message_by_view: HashMap::new(),
             messages: vec![],
+            local_queue: VecDeque::new(),
 
             v_height: 0,
             locked_node: Some(genesis_block.clone()),
@@ -109,11 +111,11 @@ impl HotStuffReplica {
     pub fn vote_message(
         &self,
         node: &Block,
-        option_qc: Option<QuorumCertificate>,
+        option_justify: Option<QuorumCertificate>,
         curr_view: ViewNumber,
     ) -> HotStuffMessage {
         let mut message =
-            HotStuffMessage::new(Some(node.clone()), option_qc, curr_view, self.node_id);
+            HotStuffMessage::new(Some(node.clone()), option_justify, curr_view, self.node_id);
         message.partial_sig = Some(self.sign(&message));
         message
     }
@@ -260,13 +262,24 @@ impl HotStuffReplica {
         };
     }
 
+    fn leader_create_and_sign_message(&mut self, new_block: Block) -> HotStuffMessage {
+        let mut outbound_msg = HotStuffMessage::new(
+            Some(new_block),
+            None,
+            self.pacemaker.curr_view,
+            self.node_id,
+        );
+        let partial_sig = self.sign(&outbound_msg);
+        outbound_msg.partial_sig = Some(partial_sig);
+        return outbound_msg;
+    }
+
     pub fn leader_handle_message(&mut self) -> Option<HotStuffMessage> {
         replica_log!(
             self.node_id,
             "Leader handle message at view: {:?}",
             self.pacemaker.curr_view
         );
-        // move this
         let cmd: &ClientCommand = &self.create_cmd();
 
         self.pacemaker.reset_timer();
@@ -303,15 +316,16 @@ impl HotStuffReplica {
             self.pacemaker.curr_view
         );
 
+        // msgs should only contain justify if next-view interupt is triggered
         match utils::get_highest_qc_from_votes(&self.messages) {
             Some(high_qc) => {
                 if high_qc.view_number > self.generic_qc.view_number {
+                    // update generic qc if replica falls behind
                     self.generic_qc = Arc::new(high_qc.clone());
+                    replica_debug!(self.node_id, "generic qc replaced");
                 }
             }
-            None => {
-                replica_debug!(self.node_id, "no valid QC from prev view: L");
-            } // no valid QC from previous view
+            None => {}
         };
 
         let Some(parent) = self.blockstore.get(&self.generic_qc.block_hash) else {
@@ -320,22 +334,16 @@ impl HotStuffReplica {
             return None;
         };
 
-        let new_block = Block::create_leaf(
-            parent,
-            cmd.clone(),
-            self.pacemaker.curr_view,
-            (*self.generic_qc).clone(),
-        );
+        let curr_view = self.pacemaker.curr_view;
+        let new_block =
+            Block::create_leaf(parent, cmd.clone(), curr_view, (*self.generic_qc).clone());
         self.blockstore.insert(new_block.hash(), new_block.clone());
 
         self.current_proposal = Some(new_block.clone());
         replica_debug!(self.node_id, "Success: Leader:: Prepare");
-        return Some(HotStuffMessage::new(
-            Some(new_block),
-            None,
-            self.pacemaker.curr_view,
-            self.node_id,
-        ));
+
+        // leader should also vote for their own message
+        return Some(self.leader_create_and_sign_message(new_block));
     }
 
     fn get_justified_block(&self, block: &Block) -> Option<&Block> {
@@ -418,6 +426,12 @@ impl HotStuffReplica {
         if is_safe && is_valid_sig {
             outbound_msg = Some(self.vote_message(&b_star, None, curr_view + 1))
         } else {
+            replica_debug!(
+                self.node_id,
+                "is_safe: {:?}, is_valid_sig: {:?}",
+                is_safe,
+                is_valid_sig
+            );
             return outbound_msg;
         }
 
@@ -480,9 +494,10 @@ impl HotStuffReplica {
         if msg.view_number + 1 < self.pacemaker.curr_view {
             replica_debug!(
                 self.node_id,
-                "Recieved stale message from view: {:?} at curr_view{:?}",
+                "Recieved stale message from view: {:?} at curr_view {:?} from node: {:?}",
                 msg.view_number,
-                self.pacemaker.curr_view
+                self.pacemaker.curr_view,
+                msg.sender
             );
         }
 
@@ -503,18 +518,24 @@ impl HotStuffReplica {
             return Ok(());
         };
 
+        let next_leader = self.pacemaker.get_leader_for_view(curr_view + 1);
+
         if is_leader {
             self.node_sender
-                .send(ReplicaOutbound::Broadcast(outbound_msg))
+                .send(ReplicaOutbound::Broadcast(outbound_msg.clone()))
                 .await?;
         } else {
-            let next_leader = self.pacemaker.get_leader_for_view(curr_view + 1);
             replica_log!(
                 self.node_id,
                 "Sending msg from: {:?} to: {:?}",
                 self.node_id,
                 next_leader
             );
+
+            if self.node_id == next_leader {
+                self.local_queue.push_back(outbound_msg);
+                return Ok(());
+            }
 
             self.node_sender
                 .send(ReplicaOutbound::SendTo(next_leader, outbound_msg))
@@ -553,10 +574,25 @@ impl HotStuffReplica {
             let pacemaker_timer = sleep(time_remaining);
             pin!(pacemaker_timer);
 
+            let local_msg_future = async {
+                if let Some(msg) = self.local_queue.pop_front() {
+                    Some(msg)
+                } else {
+                    // No local messages: block forever (or until next loop iteration)
+                    pending().await
+                }
+            };
+            pin!(local_msg_future);
+
             tokio::select! {
                 Some(msg) = to_replica_rx.recv() => {
                     self.handle_replica_inbound(msg).await?;
-                }
+                },
+
+                Some(msg) = &mut local_msg_future => {
+                    self.handle_replica_inbound(ReplicaInBound::HotStuff(msg)).await?
+                },
+
 
                 _ = &mut pacemaker_timer => {
                     if self.pacemaker.should_advance_view() {

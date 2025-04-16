@@ -27,19 +27,34 @@ pub struct HashableMessage {
 impl HotStuffMessage {
     pub fn new(
         node: Option<Block>,
-        option_qc: Option<QuorumCertificate>,
+        option_justify: Option<QuorumCertificate>,
         curr_view: ViewNumber,
         sender: PeerId,
     ) -> Self {
         Self {
             view_number: curr_view,
             node,
-            justify: option_qc,
+            justify: option_justify,
             partial_sig: None,
             sender,
         }
     }
 
+    pub fn new_with_sig(
+        node: Option<Block>,
+        option_qc: Option<QuorumCertificate>,
+        curr_view: ViewNumber,
+        sender: PeerId,
+        partial_sig: PartialSig,
+    ) -> Self {
+        Self {
+            view_number: curr_view,
+            node,
+            justify: option_qc,
+            partial_sig: Some(partial_sig),
+            sender,
+        }
+    }
     pub fn hash(&self) -> Sha256Hash {
         let block_hash = match &self.node {
             Some(block) => block.hash(),
