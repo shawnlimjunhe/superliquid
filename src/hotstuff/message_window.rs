@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{VecDeque, vec_deque};
 
 use super::{message::HotStuffMessage, replica::ViewNumber};
 
@@ -58,6 +58,37 @@ impl MessageWindow {
             }
         }
         true
+    }
+
+    pub fn iter(&self) -> MessageWindowIter<'_> {
+        let mut outer = self.messages.iter();
+        let inner = outer.next().map(|v| v.iter());
+
+        MessageWindowIter { outer, inner }
+    }
+}
+
+pub struct MessageWindowIter<'a> {
+    outer: vec_deque::Iter<'a, Vec<HotStuffMessage>>,
+    inner: Option<std::slice::Iter<'a, HotStuffMessage>>,
+}
+
+impl<'a> Iterator for MessageWindowIter<'a> {
+    type Item = &'a HotStuffMessage;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(inner) = &mut self.inner {
+                if let Some(msg) = inner.next() {
+                    return Some(msg);
+                }
+            }
+
+            self.inner = self.outer.next().map(|v| v.iter());
+            if self.inner.is_none() {
+                return None;
+            }
+        }
     }
 }
 
