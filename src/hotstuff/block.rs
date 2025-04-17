@@ -11,7 +11,7 @@ use super::{
 
 pub type BlockHash = Sha256Hash;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Block {
     Genesis {
         cmd: ClientCommand,

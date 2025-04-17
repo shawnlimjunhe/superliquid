@@ -23,6 +23,7 @@ use super::{
     client_command::{Action, ClientCommand},
     crypto::{PartialSig, QuorumCertificate},
     message::HotStuffMessage,
+    message_window::MessageWindow,
     pacemaker::Pacemaker,
 };
 
@@ -43,11 +44,8 @@ pub struct HotStuffReplica {
     mempool: Vec<Transaction>,
 
     pub message_by_view: HashMap<ViewNumber, Vec<HotStuffMessage>>,
-    pub messages: Vec<HotStuffMessage>,
+    pub messages: MessageWindow,
     pub local_queue: VecDeque<HotStuffMessage>,
-    pub v_height: u128,
-    pub locked_node: Option<Block>,
-    pub last_exec_node: Option<Block>,
     pub pacemaker: Pacemaker,
 
     node_sender: mpsc::Sender<ReplicaOutbound>,
@@ -75,12 +73,8 @@ impl HotStuffReplica {
             mempool: vec![],
 
             message_by_view: HashMap::new(),
-            messages: vec![],
+            messages: MessageWindow::new(0),
             local_queue: VecDeque::new(),
-
-            v_height: 0,
-            locked_node: Some(genesis_block.clone()),
-            last_exec_node: Some(genesis_block),
 
             pacemaker: Pacemaker::new(),
             node_sender,

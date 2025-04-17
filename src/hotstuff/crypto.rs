@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{block::BlockHash, hexstring, message::HotStuffMessage, replica::ViewNumber};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PartialSig {
     #[serde(
         serialize_with = "hexstring::serialize_verifying_key",
@@ -31,7 +31,7 @@ impl PartialSig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct QuorumCertificate {
     pub(crate) view_number: ViewNumber,
     pub(crate) block_hash: BlockHash,

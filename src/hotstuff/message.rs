@@ -8,7 +8,7 @@ use super::{
     replica::ViewNumber,
 };
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HotStuffMessage {
     pub view_number: ViewNumber,
     pub node: Option<Block>,

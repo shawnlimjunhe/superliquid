@@ -2,7 +2,7 @@ use crate::types::Sha256Hash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Action {
     Transfer {
         from: String,
@@ -19,7 +19,7 @@ impl Action {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ClientCommand {
     pub(crate) transactions: Action,
 }
