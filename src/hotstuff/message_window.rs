@@ -60,6 +60,20 @@ impl MessageWindow {
         true
     }
 
+    pub fn get_messages_for_view(&self, view: ViewNumber) -> Option<&Vec<HotStuffMessage>> {
+        if view < self.lowest_view {
+            return None;
+        }
+
+        let highest_view = self.lowest_view as usize + self.messages.len();
+        if (view as usize) > highest_view {
+            return None;
+        }
+
+        let index = (view - self.lowest_view) as usize;
+        return self.messages.get(index);
+    }
+
     pub fn iter(&self) -> MessageWindowIter<'_> {
         let mut outer = self.messages.iter();
         let inner = outer.next().map(|v| v.iter());

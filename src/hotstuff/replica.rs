@@ -43,7 +43,6 @@ pub struct HotStuffReplica {
     blockstore: HashMap<BlockHash, Block>,
     mempool: Vec<Transaction>,
 
-    pub message_by_view: HashMap<ViewNumber, Vec<HotStuffMessage>>,
     pub messages: MessageWindow,
     pub local_queue: VecDeque<HotStuffMessage>,
     pub pacemaker: Pacemaker,
@@ -72,7 +71,6 @@ impl HotStuffReplica {
             blockstore,
             mempool: vec![],
 
-            message_by_view: HashMap::new(),
             messages: MessageWindow::new(0),
             local_queue: VecDeque::new(),
 
@@ -93,13 +91,6 @@ impl HotStuffReplica {
             signer_id: self.get_public_key(),
             signature,
         }
-    }
-
-    pub fn push_message_to_correct_view(&mut self, message: HotStuffMessage) {
-        self.message_by_view
-            .entry(message.view_number)
-            .or_default()
-            .push(message);
     }
 
     pub fn vote_message(
@@ -269,17 +260,18 @@ impl HotStuffReplica {
     }
 
     pub fn leader_handle_message(&mut self) -> Option<HotStuffMessage> {
+        let curr_view = self.pacemaker.curr_view;
         replica_log!(
             self.node_id,
             "Leader handle message at view: {:?}",
-            self.pacemaker.curr_view
+            curr_view
         );
         let cmd: &ClientCommand = &self.create_cmd();
 
         self.pacemaker.reset_timer();
 
         if !utils::has_quorum_for_view(
-            &self.message_by_view,
+            self.messages.get_messages_for_view(curr_view),
             self.pacemaker.curr_view,
             self.quorum_threshold(),
         ) {
@@ -291,11 +283,12 @@ impl HotStuffReplica {
             return None;
         }
 
-        let votes = &self
-            .message_by_view
-            .entry(self.pacemaker.curr_view)
-            .or_default()
-            .clone();
+        let votes = self.messages.get_messages_for_view(curr_view);
+
+        let Some(votes) = votes else {
+            replica_debug!(self.node_id, "Failed to get messages for current vote");
+            return None;
+        };
 
         let qc = self.create_qc_from_votes(votes);
 
@@ -495,7 +488,6 @@ impl HotStuffReplica {
             );
         }
 
-        self.push_message_to_correct_view(msg.clone());
         self.messages.push(msg.clone());
 
         let leader = self.pacemaker.current_leader();

@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-
 use super::{
-    crypto::QuorumCertificate, message::HotStuffMessage, message_window::MessageWindow,
+    crypto::QuorumCertificate,
+    message::{self, HotStuffMessage},
+    message_window::MessageWindow,
     replica::ViewNumber,
 };
 
@@ -13,11 +13,11 @@ pub fn get_highest_qc_from_votes<'a>(votes: &'a MessageWindow) -> Option<&'a Quo
 }
 
 pub(crate) fn has_quorum_for_view(
-    messages: &HashMap<ViewNumber, Vec<HotStuffMessage>>,
+    messages: Option<&Vec<HotStuffMessage>>,
     view: ViewNumber,
     quorum_threhold: usize,
 ) -> bool {
-    let Some(msgs) = messages.get(&view) else {
+    let Some(msgs) = messages else {
         return false;
     };
 
