@@ -160,6 +160,7 @@ mod tests {
             justify: None,
             partial_sig: Some(partial_sig.clone()),
             sender: 1,
+            sender_view: 0,
         };
 
         let qc = QuorumCertificate::from_votes_unchecked(&vec![vote]).unwrap();

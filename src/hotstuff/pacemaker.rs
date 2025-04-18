@@ -38,13 +38,13 @@ impl Pacemaker {
 
     pub(crate) fn get_current_timeout(&self) -> Duration {
         let failed_views = self.curr_view - self.last_commited_view;
-        let base: u32 = 2;
+        let base: f32 = 1.5;
         // pacemaker_log!(
         //     "Last commited view: {:?}, failed views {:?}",
         //     self.last_commited_view,
         //     failed_views
         // );
-        self.base_timeout * base.pow(failed_views as u32)
+        self.base_timeout * base.powf(failed_views as f32).round() as u32
     }
 
     pub(crate) fn set_last_committed_view(&mut self, qc: Arc<QuorumCertificate>) {
@@ -61,9 +61,9 @@ impl Pacemaker {
         self.last_view_change = Instant::now();
     }
 
-    pub(crate) fn fast_forward_view(&mut self, incoming_view: ViewNumber) {
+    pub(crate) fn fast_forward_view(&mut self, incoming_view: ViewNumber) -> bool {
         if incoming_view <= self.curr_view {
-            return;
+            return false;
         }
         pacemaker_log!(
             "Fast forwarding view from {:?} to {:?}",
@@ -72,6 +72,7 @@ impl Pacemaker {
         );
         self.curr_view = incoming_view;
         self.last_view_change = Instant::now();
+        true
     }
 
     pub(crate) fn current_leader(&self) -> usize {

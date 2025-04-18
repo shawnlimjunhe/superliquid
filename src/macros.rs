@@ -13,13 +13,13 @@ macro_rules! replica_log {
 
 #[macro_export]
 macro_rules! replica_debug {
-    ($node_id:expr, $($arg:tt)*) => {{
+    ($node_id:expr, $curr_view:expr, $($arg:tt)*) => {{
         if std::env::var("REPLICA_DEBUG").map(|v| v == "true").unwrap_or(false) {
         use chrono::Local;
         let now = Local::now().format("%H:%M:%S%.3f");
         let prefix = format!(
-            "\x1b[90m[{}]\x1b[0m \x1b[91m[Replica {}]\x1b[0m",
-            now, $node_id
+            "\x1b[90m[{}]\x1b[0m \x1b[91m[Replica {} @ view {}]\x1b[0m",
+            now, $node_id, $curr_view
         );
         println!("{} {}", prefix, format!($($arg)*));
         }
