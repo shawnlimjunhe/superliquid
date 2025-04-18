@@ -99,8 +99,13 @@ impl HotStuffReplica {
         option_justify: Option<QuorumCertificate>,
         curr_view: ViewNumber,
     ) -> HotStuffMessage {
-        let mut message =
-            HotStuffMessage::new(Some(node.clone()), option_justify, curr_view, self.node_id);
+        let mut message = HotStuffMessage::new(
+            Some(node.clone()),
+            option_justify,
+            curr_view + 1,
+            self.node_id,
+            curr_view,
+        );
         message.partial_sig = Some(self.sign(&message));
         message
     }
@@ -253,10 +258,42 @@ impl HotStuffReplica {
             None,
             self.pacemaker.curr_view,
             self.node_id,
+            self.pacemaker.curr_view,
         );
         let partial_sig = self.sign(&outbound_msg);
         outbound_msg.partial_sig = Some(partial_sig);
         return outbound_msg;
+    }
+
+    fn get_justified_block(&self, block: &Block) -> Option<&Block> {
+        let hash = match block {
+            Block::Normal { justify, .. } => &justify.block_hash,
+            Block::Genesis { .. } => return None,
+        };
+        self.blockstore.get(hash)
+    }
+
+    /// Return owned clones, not references:
+    fn get_justifed_block_and_qc_cloned(
+        &self,
+        block: &Block,
+    ) -> (Option<Block>, Option<QuorumCertificate>) {
+        let justify = match block {
+            Block::Normal { justify, .. } => justify,
+            Block::Genesis { .. } => return (None, None),
+        };
+
+        // Clone the child block from the store so we get an owned `Block`
+        let child_block = self.blockstore.get(&justify.block_hash).cloned();
+
+        (child_block, Some(justify.clone()))
+    }
+
+    fn is_parent(&self, block_child: &Block, block_parent: &Block) -> bool {
+        match block_child {
+            Block::Genesis { .. } => false,
+            Block::Normal { parent_id, .. } => block_parent.hash() == *parent_id,
+        }
     }
 
     pub fn leader_handle_message(&mut self) -> Option<HotStuffMessage> {
@@ -293,7 +330,11 @@ impl HotStuffReplica {
         let qc = self.create_qc_from_votes(votes);
 
         match qc {
-            Some(qc) => self.generic_qc = Arc::new(qc),
+            Some(qc) => {
+                self.generic_qc = Arc::new(qc);
+                self.messages.prune_before_view(self.generic_qc.view_number);
+            }
+
             None => {}
         }
 
@@ -309,6 +350,7 @@ impl HotStuffReplica {
                 if high_qc.view_number > self.generic_qc.view_number {
                     // update generic qc if replica falls behind
                     self.generic_qc = Arc::new(high_qc.clone());
+                    self.messages.prune_before_view(self.generic_qc.view_number);
                     replica_debug!(self.node_id, "generic qc replaced");
                 }
             }
@@ -331,37 +373,6 @@ impl HotStuffReplica {
 
         // leader should also vote for their own message
         return Some(self.leader_create_and_sign_message(new_block));
-    }
-
-    fn get_justified_block(&self, block: &Block) -> Option<&Block> {
-        let hash = match block {
-            Block::Normal { justify, .. } => &justify.block_hash,
-            Block::Genesis { .. } => return None,
-        };
-        self.blockstore.get(hash)
-    }
-
-    /// Return owned clones, not references:
-    fn get_justifed_block_and_qc_cloned(
-        &self,
-        block: &Block,
-    ) -> (Option<Block>, Option<QuorumCertificate>) {
-        let justify = match block {
-            Block::Normal { justify, .. } => justify,
-            Block::Genesis { .. } => return (None, None),
-        };
-
-        // Clone the child block from the store so we get an owned `Block`
-        let child_block = self.blockstore.get(&justify.block_hash).cloned();
-
-        (child_block, Some(justify.clone()))
-    }
-
-    fn is_parent(&self, block_child: &Block, block_parent: &Block) -> bool {
-        match block_child {
-            Block::Genesis { .. } => false,
-            Block::Normal { parent_id, .. } => block_parent.hash() == *parent_id,
-        }
     }
 
     pub fn replica_handle_message(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
@@ -432,6 +443,7 @@ impl HotStuffReplica {
             return outbound_msg;
         }
         self.generic_qc = Arc::new(b_star_justify);
+        self.messages.prune_before_view(self.generic_qc.view_number);
 
         replica_debug!(
             self.node_id,
@@ -475,8 +487,7 @@ impl HotStuffReplica {
         &mut self,
         msg: HotStuffMessage,
     ) -> Result<(), SendError<ReplicaOutbound>> {
-        // fastforward pacemaker if we are lagging
-        self.sync_view(&msg);
+        self.sync_view(&msg); // advance view if the msg is ahead 
 
         if msg.view_number + 1 < self.pacemaker.curr_view {
             replica_debug!(
@@ -493,8 +504,13 @@ impl HotStuffReplica {
         let leader = self.pacemaker.current_leader();
         let is_leader = self.node_id == leader;
         let curr_view = self.pacemaker.curr_view;
+        let is_leader_executing_replica_logic =
+            is_leader && msg.sender == self.node_id && msg.sender_view == curr_view;
 
-        let outbound_msg = if is_leader {
+        // Choose which role-specific handler to run:
+        // Every node executes replica logic
+        // Leader executes leader logic and sends message to itself to handle as replica
+        let outbound_msg = if is_leader && !is_leader_executing_replica_logic {
             self.leader_handle_message()
         } else {
             self.replica_handle_message(msg)
@@ -506,27 +522,30 @@ impl HotStuffReplica {
 
         let next_leader = self.pacemaker.get_leader_for_view(curr_view + 1);
 
-        if is_leader {
+        if is_leader && !is_leader_executing_replica_logic {
             self.node_sender
                 .send(ReplicaOutbound::Broadcast(outbound_msg.clone()))
                 .await?;
-        } else {
-            replica_log!(
-                self.node_id,
-                "Sending msg from: {:?} to: {:?}",
-                self.node_id,
-                next_leader
-            );
-
-            if self.node_id == next_leader {
-                self.local_queue.push_back(outbound_msg);
-                return Ok(());
-            }
-
-            self.node_sender
-                .send(ReplicaOutbound::SendTo(next_leader, outbound_msg))
-                .await?;
+            // send the message to ownself to handle as a replica
+            self.local_queue.push_back(outbound_msg);
+            return Ok(());
         }
+
+        replica_log!(
+            self.node_id,
+            "Sending msg as replica from: {:?} to: {:?}",
+            self.node_id,
+            next_leader
+        );
+
+        if self.node_id == next_leader {
+            self.local_queue.push_back(outbound_msg);
+            return Ok(());
+        }
+
+        self.node_sender
+            .send(ReplicaOutbound::SendTo(next_leader, outbound_msg))
+            .await?;
         Ok(())
     }
 
@@ -577,12 +596,18 @@ impl HotStuffReplica {
                     if self.pacemaker.should_advance_view() {
 
                         self.pacemaker.advance_view();
-                        let outbound_msg = HotStuffMessage::new(None, Some((*self.generic_qc).clone()), self.pacemaker.curr_view, self.node_id);
+                        let outbound_msg = HotStuffMessage::new(None, Some((*self.generic_qc).clone()), self.pacemaker.curr_view, self.node_id, self.pacemaker.curr_view - 1);
 
                         let leader = self.pacemaker.current_leader();
-                        self.node_sender
-                            .send(ReplicaOutbound::SendTo(leader, outbound_msg))
-                            .await?;
+
+                        if self.node_id == leader {
+                            self.local_queue.push_back(outbound_msg);
+                        } else {
+                            self.node_sender
+                                .send(ReplicaOutbound::SendTo(leader, outbound_msg))
+                                .await?;
+                        }
+
                     }
                 }
             }

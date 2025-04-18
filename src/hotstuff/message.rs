@@ -16,12 +16,15 @@ pub struct HotStuffMessage {
     pub partial_sig: Option<PartialSig>,
 
     pub sender: PeerId,
+    pub sender_view: ViewNumber,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct HashableMessage {
     view_number: ViewNumber,
     block_hash: BlockHash,
+    sender: PeerId,
+    sender_view: ViewNumber,
 }
 
 impl HotStuffMessage {
@@ -30,13 +33,16 @@ impl HotStuffMessage {
         option_justify: Option<QuorumCertificate>,
         curr_view: ViewNumber,
         sender: PeerId,
+        sender_view: ViewNumber,
     ) -> Self {
         Self {
             view_number: curr_view,
             node,
             justify: option_justify,
             partial_sig: None,
+
             sender,
+            sender_view,
         }
     }
 
@@ -45,6 +51,7 @@ impl HotStuffMessage {
         option_qc: Option<QuorumCertificate>,
         curr_view: ViewNumber,
         sender: PeerId,
+        sender_view: ViewNumber,
         partial_sig: PartialSig,
     ) -> Self {
         Self {
@@ -52,7 +59,9 @@ impl HotStuffMessage {
             node,
             justify: option_qc,
             partial_sig: Some(partial_sig),
+
             sender,
+            sender_view,
         }
     }
     pub fn hash(&self) -> Sha256Hash {
@@ -63,6 +72,8 @@ impl HotStuffMessage {
         let hashable = HashableMessage {
             view_number: self.view_number,
             block_hash,
+            sender: self.sender,
+            sender_view: self.sender_view,
         };
 
         let encoded = bincode::serialize(&hashable).unwrap();

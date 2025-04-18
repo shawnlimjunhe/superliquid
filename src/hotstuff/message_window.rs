@@ -11,7 +11,7 @@ pub struct MessageWindow {
 impl MessageWindow {
     pub fn new(view_number: ViewNumber) -> Self {
         MessageWindow {
-            messages: VecDeque::new(),
+            messages: VecDeque::with_capacity(4), // optimistic 3 phase
             lowest_view: view_number,
         }
     }
@@ -113,7 +113,7 @@ mod tests {
     use super::*;
 
     fn dummy_message(view: ViewNumber, sender: PeerId) -> HotStuffMessage {
-        HotStuffMessage::new(None, None, view, sender)
+        HotStuffMessage::new(None, None, view, sender, 0)
     }
 
     #[test]
