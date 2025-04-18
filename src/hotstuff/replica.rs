@@ -41,7 +41,7 @@ pub struct HotStuffReplica {
 
     current_proposal: Option<Block>,
     blockstore: HashMap<BlockHash, Block>,
-    mempool: Vec<Transaction>,
+    mempool: VecDeque<Transaction>,
 
     pub messages: MessageWindow,
     pub local_queue: VecDeque<HotStuffMessage>,
@@ -69,7 +69,7 @@ impl HotStuffReplica {
 
             current_proposal: None,
             blockstore,
-            mempool: vec![],
+            mempool: VecDeque::new(),
 
             messages: MessageWindow::new(0),
             local_queue: VecDeque::new(),
@@ -535,20 +535,6 @@ impl HotStuffReplica {
         self.pacemaker.fast_forward_view(incoming_view);
     }
 
-    async fn handle_replica_inbound(
-        &mut self,
-        inbound_msg: ReplicaInBound,
-    ) -> Result<(), SendError<ReplicaOutbound>> {
-        match inbound_msg {
-            ReplicaInBound::HotStuff(hotstuff_msg) => self.handle_message(hotstuff_msg).await,
-            ReplicaInBound::Transaction(tx) => {
-                replica_log!(self.node_id, "Handle Transaction inbound to replica");
-                self.mempool.push(tx);
-                Ok(())
-            }
-        }
-    }
-
     pub async fn run_replica(
         &mut self,
         mut to_replica_rx: mpsc::Receiver<ReplicaInBound>,
@@ -568,15 +554,22 @@ impl HotStuffReplica {
                     pending().await
                 }
             };
+
             pin!(local_msg_future);
 
             tokio::select! {
                 Some(msg) = to_replica_rx.recv() => {
-                    self.handle_replica_inbound(msg).await?;
+                    match msg {
+                        ReplicaInBound::HotStuff(msg) => self.handle_message(msg).await?,
+                        ReplicaInBound::Transaction(tx) => {
+                            self.mempool.push_back(tx);
+                        }
+                    }
+
                 },
 
                 Some(msg) = &mut local_msg_future => {
-                    self.handle_replica_inbound(ReplicaInBound::HotStuff(msg)).await?
+                    self.handle_message(msg).await?
                 },
 
 

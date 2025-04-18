@@ -1,7 +1,5 @@
 use super::{
-    crypto::QuorumCertificate,
-    message::{self, HotStuffMessage},
-    message_window::MessageWindow,
+    crypto::QuorumCertificate, message::HotStuffMessage, message_window::MessageWindow,
     replica::ViewNumber,
 };
 
