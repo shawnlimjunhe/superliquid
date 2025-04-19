@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::types::Sha256Hash;
+use crate::{replica_debug, types::Sha256Hash};
 use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
@@ -54,25 +54,22 @@ impl QuorumCertificate {
         }
     }
 
-    pub fn from_votes_unchecked(votes: &Vec<HotStuffMessage>) -> Option<Self> {
-        // assume all votes are valid and consistent
-        let first_vote = votes.first()?;
-
-        let block_hash = match &first_vote.node {
-            Some(block) => block.hash(),
-            None => [0; 32],
-        };
-
-        let view_number = first_vote.view_number;
-
-        let sigs = votes.iter().filter_map(|v| v.partial_sig.clone()).collect();
-
-        Some(QuorumCertificate {
+    pub fn from_signatures(
+        view_number: ViewNumber,
+        block_hash: BlockHash,
+        message_hash: [u8; 32],
+        partial_sigs: Vec<PartialSig>,
+    ) -> Self {
+        assert!(
+            !partial_sigs.is_empty(),
+            "from_signatures requires at least one partial signature"
+        );
+        QuorumCertificate {
             view_number,
             block_hash,
-            message_hash: first_vote.hash(),
-            partial_sigs: sigs,
-        })
+            message_hash,
+            partial_sigs,
+        }
     }
 
     pub fn verify(&self, validator_set: &HashSet<VerifyingKey>, quorum_size: usize) -> bool {
@@ -98,6 +95,11 @@ impl QuorumCertificate {
             // verify that signatures are valid
             if pk.verify_strict(&self.message_hash, &sig.signature).is_ok() {
                 valid_sig_count += 1;
+            } else {
+                println!(
+                    "Not valid leh {:?} {:?}.",
+                    &self.message_hash, &sig.signature
+                )
             }
         }
 
@@ -145,33 +147,33 @@ mod tests {
         assert!(qc.partial_sigs.is_empty());
     }
 
-    #[test]
-    fn test_from_votes_unchecked_constructs_qc() {
-        let mut signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
-        let public_key = signing_key.verifying_key();
-        let message_hash = Sha256Hash::from([1u8; 32]);
+    // #[test]
+    // fn test_from_votes_unchecked_constructs_qc() {
+    //     let mut signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    //     let public_key = signing_key.verifying_key();
+    //     let message_hash = Sha256Hash::from([1u8; 32]);
 
-        let signature = signing_key.sign(&message_hash);
-        let partial_sig = PartialSig::new(public_key, signature);
+    //     let signature = signing_key.sign(&message_hash);
+    //     let partial_sig = PartialSig::new(public_key, signature);
 
-        let vote = HotStuffMessage {
-            view_number: 1,
-            node: None,
-            justify: None,
-            partial_sig: Some(partial_sig.clone()),
-            sender: 1,
-            sender_view: 0,
-        };
+    //     let vote = HotStuffMessage {
+    //         view_number: 1,
+    //         node: None,
+    //         justify: None,
+    //         partial_sig: Some(partial_sig.clone()),
+    //         sender: 1,
+    //         sender_view: 0,
+    //     };
 
-        let qc = QuorumCertificate::from_votes_unchecked(&vec![vote]).unwrap();
+    //     let qc = QuorumCertificate::from_votes_unchecked(vec![&vote]).unwrap();
 
-        assert_eq!(qc.view_number, 1);
-        assert_eq!(qc.partial_sigs.len(), 1);
-        assert_eq!(
-            qc.partial_sigs[0].signer_id.to_bytes(),
-            public_key.to_bytes()
-        );
-    }
+    //     assert_eq!(qc.view_number, 1);
+    //     assert_eq!(qc.partial_sigs.len(), 1);
+    //     assert_eq!(
+    //         qc.partial_sigs[0].signer_id.to_bytes(),
+    //         public_key.to_bytes()
+    //     );
+    // }
 
     #[test]
     fn test_verify_qc_with_valid_sigs() {

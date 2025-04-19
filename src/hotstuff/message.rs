@@ -9,6 +9,12 @@ use super::{
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum Reason {
+    Proposal,
+    Vote,
+    NewView,
+}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HotStuffMessage {
     pub view_number: ViewNumber,
     pub node: Option<Block>,
@@ -17,6 +23,7 @@ pub struct HotStuffMessage {
 
     pub sender: PeerId,
     pub sender_view: ViewNumber,
+    pub reason: Reason,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -34,6 +41,8 @@ impl HotStuffMessage {
         curr_view: ViewNumber,
         sender: PeerId,
         sender_view: ViewNumber,
+
+        reason: Reason,
     ) -> Self {
         Self {
             view_number: curr_view,
@@ -43,6 +52,8 @@ impl HotStuffMessage {
 
             sender,
             sender_view,
+
+            reason,
         }
     }
 
@@ -53,6 +64,8 @@ impl HotStuffMessage {
         sender: PeerId,
         sender_view: ViewNumber,
         partial_sig: PartialSig,
+
+        reason: Reason,
     ) -> Self {
         Self {
             view_number: curr_view,
@@ -62,6 +75,8 @@ impl HotStuffMessage {
 
             sender,
             sender_view,
+
+            reason,
         }
     }
     pub fn hash(&self) -> Sha256Hash {

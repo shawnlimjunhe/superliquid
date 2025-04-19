@@ -5,6 +5,15 @@ use std::collections::HashSet;
 use std::env;
 use std::time::Duration;
 
+pub(crate) fn retrieve_verifying_key(node_id: usize) -> VerifyingKey {
+    dotenv().ok();
+    let env_key = format!("PUBLIC_KEY_{}", node_id);
+    let pk_hex = env::var(&env_key).expect(&format!("{} not set", &env_key));
+
+    let pk_bytes = <[u8; 32]>::from_hex(&pk_hex).expect("Invalid hex");
+    VerifyingKey::from_bytes(&pk_bytes).expect("Invalid public key bytes")
+}
+
 pub(crate) fn retrieve_signing_key(node_id: usize) -> SigningKey {
     dotenv().ok();
     let env_key = format!("SECRET_KEY_{}", node_id);
@@ -12,6 +21,13 @@ pub(crate) fn retrieve_signing_key(node_id: usize) -> SigningKey {
     let sk_bytes = <[u8; 32]>::from_hex(&sk_hex).expect("Invalid hex");
 
     SigningKey::from_bytes(&sk_bytes)
+}
+
+pub(crate) fn retrieve_signing_key_checked(node_id: usize) -> SigningKey {
+    let sk = retrieve_signing_key(node_id);
+    let vk = retrieve_verifying_key(node_id);
+    assert_eq!(sk.verifying_key().as_bytes(), vk.as_bytes());
+    return sk;
 }
 
 pub fn retrieve_num_validators() -> usize {

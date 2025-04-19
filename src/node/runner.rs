@@ -43,11 +43,11 @@ async fn spawn_all_node_tasks(
         tokio::spawn(run_peer_listener(
             node.clone(),
             consensus_addr.to_owned(),
-            to_replica_tx,
+            to_replica_tx.clone(),
         )),
     ];
 
-    tokio::spawn(async move { replica.run_replica(to_replica_rx).await });
+    tokio::spawn(async move { replica.run_replica(to_replica_rx, to_replica_tx).await });
     tokio::spawn(handle_replica_outbound(from_replica_rx, node.clone()));
 
     let _ = join_all(handles).await;

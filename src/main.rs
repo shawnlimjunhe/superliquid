@@ -38,6 +38,28 @@ async fn main() {
         })
         .collect();
 
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+
+    // 1) Create a secure RNG
+    let mut csprng = OsRng;
+
+    // 2) Generate a new random SigningKey
+    let signing_key: SigningKey = SigningKey::generate(&mut csprng);
+
+    // Get the 32‑byte secret key
+    let sk_bytes = signing_key.to_bytes();
+    // Convert to lowercase hex
+    let sk_hex: String = sk_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+    // Derive and hex‑encode the public key
+    let verifying_key = signing_key.verifying_key();
+    let pk_bytes = verifying_key.to_bytes();
+    let pk_hex: String = pk_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+    println!("SigningKey (hex):   {}", sk_hex);
+    println!("VerifyingKey (hex): {}", pk_hex);
+
     let _ = match args.get(1).map(|s| s.as_str()) {
         Some("node") => run_node(client_addr, consensus_addr, peers, node_index).await,
         Some("client") => client::run_client(&client_addr).await,
