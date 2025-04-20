@@ -14,7 +14,7 @@ use crate::{
     config,
     hotstuff::utils,
     replica_debug, replica_log,
-    types::{ReplicaInBound, ReplicaOutbound, Transaction, mpsc_error},
+    types::{ReplicaInBound, ReplicaOutbound, Sha256Hash, Transaction, mpsc_error},
 };
 
 use super::{
@@ -122,7 +122,7 @@ impl HotStuffReplica {
         // 2) Tally signatures by (block_hash → Vec<PartialSig>),
         //    verifying and deduplicating by signer.
         let mut seen: HashSet<VerifyingKey> = HashSet::new();
-        let mut tally: HashMap<BlockHash, Vec<PartialSig>> = HashMap::new();
+        let mut tally: HashMap<(BlockHash, Sha256Hash), Vec<PartialSig>> = HashMap::new();
 
         for m in msgs {
             if let Some(sig) = m.partial_sig.clone() {
@@ -130,6 +130,17 @@ impl HotStuffReplica {
                 if !self.validator_set.contains(&sig.signer_id) {
                     continue;
                 }
+
+                let msg_hash = &m.hash();
+
+                if sig
+                    .signer_id
+                    .verify_strict(&m.hash(), &sig.signature)
+                    .is_err()
+                {
+                    continue;
+                }
+
                 if !seen.insert(sig.signer_id.clone()) {
                     continue;
                 }
@@ -140,31 +151,21 @@ impl HotStuffReplica {
                     .as_ref()
                     .map(|qc| qc.block_hash) // if votes carry a QC
                     .or_else(|| m.node.as_ref().map(|b| b.hash()))
-                    .unwrap_or([0; 32]);
+                    .unwrap_or([1; 32]);
 
-                tally.entry(bh).or_default().push(sig);
+                // ensure that quorum has same msg_hash
+                tally.entry((bh, *msg_hash)).or_default().push(sig);
             }
         }
 
         // 3) As soon as any bucket reaches quorum, build the QC and return
         let quorum = self.quorum_threshold();
-        for (block_hash, sigs) in tally {
+        for ((block_hash, message_hash), sigs) in tally {
             if sigs.len() >= quorum {
-                // We need a message_hash: just pick the first vote’s hash.
-                let first_msg_hash = msgs
-                    .iter()
-                    .find(|m| {
-                        // match on same block_hash & view
-                        let bh = m.node.as_ref().map(|b| b.hash()).unwrap_or([0; 32]);
-                        m.view_number == view && bh == block_hash
-                    })
-                    .expect("we have ≥ quorum votes, so at least one exists")
-                    .hash();
-
                 return Some(QuorumCertificate::from_signatures(
                     view,
                     block_hash,
-                    first_msg_hash,
+                    message_hash,
                     sigs,
                 ));
             }
@@ -425,12 +426,7 @@ impl HotStuffReplica {
             return outbound_msg;
         }
         self.generic_qc = Arc::new(b_star_justify.clone());
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "Set generic Qc on replica to: {:?}",
-            b_star_justify.block_hash
-        );
+
         self.messages.prune_before_view(self.generic_qc.view_number);
 
         replica_debug!(
@@ -655,9 +651,6 @@ impl HotStuffReplica {
                                 .await
                                 .map_err(|e| mpsc_error("Send to replica failed", e));
                             replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending self");
-                            println!();
-                            replica_debug!(self.node_id, self.pacemaker.curr_view, "LEADER FOR CURR VIEW");
-                            println!();
                         } else {
                             replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending to node: {:?} with msg view: {:?}", leader, outbound_msg.view_number);
                             self.node_sender

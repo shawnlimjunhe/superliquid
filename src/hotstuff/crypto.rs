@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
-use crate::{replica_debug, types::Sha256Hash};
+use crate::types::Sha256Hash;
 use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-use super::{block::BlockHash, hexstring, message::HotStuffMessage, replica::ViewNumber};
+use super::{block::BlockHash, hexstring, replica::ViewNumber};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PartialSig {
@@ -78,6 +78,7 @@ impl QuorumCertificate {
         let mut valid_sig_count = 0;
 
         if self.view_number == 0 && self.block_hash == Self::GENESIS_BLOCK_HASH {
+            // Genesis QC
             return true;
         }
 
@@ -97,8 +98,8 @@ impl QuorumCertificate {
                 valid_sig_count += 1;
             } else {
                 println!(
-                    "Not valid leh {:?} {:?}.",
-                    &self.message_hash, &sig.signature
+                    "Not valid leh {:?} {:?}. pk: {:?}",
+                    &self.message_hash, &sig.signature, pk,
                 )
             }
         }

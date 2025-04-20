@@ -26,12 +26,11 @@ pub struct HotStuffMessage {
     pub reason: Reason,
 }
 
+// Hashable message should only contain these two fields
 #[derive(Serialize, Deserialize)]
 pub struct HashableMessage {
     view_number: ViewNumber,
     block_hash: BlockHash,
-    sender: PeerId,
-    sender_view: ViewNumber,
 }
 
 impl HotStuffMessage {
@@ -87,8 +86,6 @@ impl HotStuffMessage {
         let hashable = HashableMessage {
             view_number: self.view_number,
             block_hash,
-            sender: self.sender,
-            sender_view: self.sender_view,
         };
 
         let encoded = bincode::serialize(&hashable).unwrap();
