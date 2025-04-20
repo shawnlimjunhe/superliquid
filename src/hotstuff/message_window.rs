@@ -108,12 +108,12 @@ impl<'a> Iterator for MessageWindowIter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::node::state::PeerId;
+    use crate::{hotstuff::message::Reason, node::state::PeerId};
 
     use super::*;
 
     fn dummy_message(view: ViewNumber, sender: PeerId) -> HotStuffMessage {
-        HotStuffMessage::new(None, None, view, sender, 0)
+        HotStuffMessage::new(None, None, view, sender, 0, Reason::NewView)
     }
 
     #[test]
