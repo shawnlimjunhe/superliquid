@@ -21,7 +21,7 @@ use super::{
     block::{Block, BlockHash},
     client_command::{Action, ClientCommand},
     crypto::{PartialSig, QuorumCertificate},
-    message::{HotStuffMessage, Reason},
+    message::HotStuffMessage,
     message_window::MessageWindow,
     pacemaker::Pacemaker,
 };
@@ -44,6 +44,10 @@ pub struct HotStuffReplica {
     pub pacemaker: Pacemaker,
 
     node_sender: mpsc::Sender<ReplicaOutbound>,
+
+    // view specifc flag: for view idempotency
+    proposed_for_curr_view: bool,
+    voted_for_curr_view: bool,
 }
 
 impl HotStuffReplica {
@@ -71,7 +75,15 @@ impl HotStuffReplica {
 
             pacemaker: Pacemaker::new(),
             node_sender,
+
+            proposed_for_curr_view: false,
+            voted_for_curr_view: false,
         }
+    }
+
+    fn reset_view_flags(&mut self) {
+        self.proposed_for_curr_view = false;
+        self.voted_for_curr_view = false;
     }
 
     pub fn get_public_key(&self) -> VerifyingKey {
@@ -99,7 +111,6 @@ impl HotStuffReplica {
             self.pacemaker.curr_view,
             self.node_id,
             self.pacemaker.curr_view,
-            Reason::Vote,
         );
         message.partial_sig = Some(self.sign(&message));
         message
@@ -208,7 +219,6 @@ impl HotStuffReplica {
             self.pacemaker.curr_view,
             self.node_id,
             self.pacemaker.curr_view,
-            Reason::Proposal,
         );
         // let partial_sig = self.sign(&outbound_msg);
         // outbound_msg.partial_sig = Some(partial_sig);
@@ -329,7 +339,6 @@ impl HotStuffReplica {
                 }
 
                 None => {
-                    println!("{:?}", self.messages.get_messages_for_view(curr_view - 1));
                     // Unable to form a QC, continue propose new block justified from highest qc or generic qc
                     replica_debug!(self.node_id, self.pacemaker.curr_view, "Unable to form QC");
                     return None;
@@ -364,8 +373,8 @@ impl HotStuffReplica {
             return None;
         }
 
-        if msg.reason == Reason::Vote {
-            // for next view
+        if msg.partial_sig.is_some() {
+            // vote message from leader for next view
             return None;
         }
 
@@ -492,11 +501,12 @@ impl HotStuffReplica {
                 "Recieved higher view message from node: {:?}",
                 msg.sender
             );
+            self.reset_view_flags();
             // advance view if view is behind
             let is_leader = self.pacemaker.current_leader() == self.node_id;
             if is_leader {
                 // Send new-view msg to self
-                let new_view_msg = self.create_new_view();
+                let new_view_msg: HotStuffMessage = self.create_new_view();
                 let _ = to_replica_tx
                     .send(ReplicaInBound::HotStuff(new_view_msg))
                     .await
@@ -514,12 +524,10 @@ impl HotStuffReplica {
             );
         }
 
-        println!();
         replica_debug!(
             self.node_id,
             self.pacemaker.curr_view,
-            "Recieved :{:?}, message: {:?} with view: {:?} from node-id: {:?}",
-            msg.reason,
+            "Recieved message: {:?} with view: {:?} from node-id: {:?}",
             msg.partial_sig,
             msg.view_number,
             msg.sender,
@@ -534,7 +542,7 @@ impl HotStuffReplica {
         // Choose which role-specific handler to run:
         // Every node executes replica logic
         // Leader executes leader logic and sends message to itself to handle as replica
-        if is_leader {
+        if is_leader && !self.proposed_for_curr_view {
             let leader_outbound_msg_opt = self.leader_handle_message();
             let Some(leader_outbound_msg) = leader_outbound_msg_opt else {
                 return Ok(());
@@ -543,11 +551,13 @@ impl HotStuffReplica {
             self.node_sender
                 .send(ReplicaOutbound::Broadcast(leader_outbound_msg.clone()))
                 .await?;
+            self.proposed_for_curr_view = true;
 
             // handle leader's msg as replica
             // Dont send to same channel to prevent data race
             self.messages.push(leader_outbound_msg.clone());
             let replica_outbound_msg_opt = self.replica_handle_message(leader_outbound_msg.clone());
+
             let Some(replica_outbound_msg) = replica_outbound_msg_opt else {
                 return Ok(());
             };
@@ -566,7 +576,12 @@ impl HotStuffReplica {
             self.node_sender
                 .send(ReplicaOutbound::SendTo(next_leader, replica_outbound_msg))
                 .await?;
+            self.voted_for_curr_view = true;
 
+            return Ok(());
+        }
+
+        if self.voted_for_curr_view {
             return Ok(());
         }
 
@@ -589,6 +604,9 @@ impl HotStuffReplica {
                 .send(ReplicaInBound::HotStuff(outbound_msg))
                 .await
                 .map_err(|e| mpsc_error("Send to replica failed", e));
+
+            self.voted_for_curr_view = true;
+
             return Ok(());
         }
 
@@ -612,7 +630,6 @@ impl HotStuffReplica {
             self.pacemaker.curr_view - 1,
             self.node_id,
             self.pacemaker.curr_view - 1,
-            Reason::NewView,
         )
     }
 
@@ -641,6 +658,7 @@ impl HotStuffReplica {
                 _ = &mut pacemaker_timer => {
                     if self.pacemaker.should_advance_view() {
                         self.pacemaker.advance_view();
+                        self.reset_view_flags();
 
                         let leader = self.pacemaker.current_leader();
                         let outbound_msg = self.create_new_view();
