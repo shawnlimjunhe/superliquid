@@ -116,7 +116,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use crate::{
-        hotstuff::{crypto::PartialSig, message::HotStuffMessage, replica::ViewNumber},
+        hotstuff::{crypto::PartialSig, replica::ViewNumber},
         types::Sha256Hash,
     };
 
@@ -147,34 +147,6 @@ mod tests {
         assert_eq!(qc.message_hash, [0u8; 32]);
         assert!(qc.partial_sigs.is_empty());
     }
-
-    // #[test]
-    // fn test_from_votes_unchecked_constructs_qc() {
-    //     let mut signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
-    //     let public_key = signing_key.verifying_key();
-    //     let message_hash = Sha256Hash::from([1u8; 32]);
-
-    //     let signature = signing_key.sign(&message_hash);
-    //     let partial_sig = PartialSig::new(public_key, signature);
-
-    //     let vote = HotStuffMessage {
-    //         view_number: 1,
-    //         node: None,
-    //         justify: None,
-    //         partial_sig: Some(partial_sig.clone()),
-    //         sender: 1,
-    //         sender_view: 0,
-    //     };
-
-    //     let qc = QuorumCertificate::from_votes_unchecked(vec![&vote]).unwrap();
-
-    //     assert_eq!(qc.view_number, 1);
-    //     assert_eq!(qc.partial_sigs.len(), 1);
-    //     assert_eq!(
-    //         qc.partial_sigs[0].signer_id.to_bytes(),
-    //         public_key.to_bytes()
-    //     );
-    // }
 
     #[test]
     fn test_verify_qc_with_valid_sigs() {

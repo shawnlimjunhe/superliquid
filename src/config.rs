@@ -66,3 +66,12 @@ pub fn retrieve_tick_duration() -> Duration {
 
     Duration::from_millis(duration_ms)
 }
+
+pub fn retrieve_multiplicative_factor() -> f32 {
+    dotenv().ok();
+
+    env::var("MULTIPLICATIVE_FACTOR")
+        .expect("multiplicative factor not set")
+        .parse::<f32>()
+        .expect("multiplicative factorTICK_DURATION must be a number")
+}

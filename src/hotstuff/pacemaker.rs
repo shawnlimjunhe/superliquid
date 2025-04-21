@@ -12,6 +12,7 @@ pub struct Pacemaker {
     pub last_commited_view: ViewNumber,
     pub timeout: Duration,
     pub base_timeout: Duration,
+    pub timeout_multiplicative_factor: f32,
     pub last_view_change: Instant,
     replica_ids: Vec<usize>,
     // pub highest_qc: QuorumCertificate,
@@ -26,6 +27,8 @@ impl Pacemaker {
             curr_view: 0,
             last_commited_view: 0,
             timeout: config::retrieve_tick_duration(),
+            timeout_multiplicative_factor: config::retrieve_multiplicative_factor(),
+
             base_timeout: config::retrieve_tick_duration(),
             last_view_change: Instant::now(),
             replica_ids,
@@ -38,13 +41,12 @@ impl Pacemaker {
 
     pub(crate) fn get_current_timeout(&self) -> Duration {
         let failed_views = self.curr_view - self.last_commited_view;
-        let base: f32 = 1.5;
-        // pacemaker_log!(
-        //     "Last commited view: {:?}, failed views {:?}",
-        //     self.last_commited_view,
-        //     failed_views
-        // );
-        self.base_timeout * base.powf(failed_views as f32).round() as u32
+
+        self.base_timeout
+            * self
+                .timeout_multiplicative_factor
+                .powf(failed_views as f32)
+                .round() as u32
     }
 
     pub(crate) fn set_last_committed_view(&mut self, qc: Arc<QuorumCertificate>) {
@@ -169,8 +171,8 @@ mod tests {
 
         pacemaker.curr_view = 3;
         pacemaker.last_commited_view = 1;
-        // 3 - 1 = 2 => 10ms * 2^2 = 10ms * 4 = 40ms
-        let expected = Duration::from_millis(40);
+        // 3 - 1 = 2 => 10ms * 1.5^2 = 10ms * 2.2 = 22ms
+        let expected = Duration::from_millis(20);
         assert_eq!(pacemaker.get_current_timeout(), expected);
     }
 
