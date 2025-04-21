@@ -47,7 +47,7 @@ async fn spawn_all_node_tasks(
         )),
     ];
 
-    tokio::spawn(async move { replica.run_replica(to_replica_rx, to_replica_tx).await });
+    tokio::spawn(async move { replica.run_replica(to_replica_rx).await });
     tokio::spawn(handle_replica_outbound(from_replica_rx, node.clone()));
 
     let _ = join_all(handles).await;
@@ -176,7 +176,7 @@ pub async fn run_node(
         mpsc::Receiver<ReplicaOutbound>,
     ) = mpsc::channel(1024);
 
-    let replica = HotStuffReplica::new(node_index, from_replica_tx);
+    let replica = HotStuffReplica::new(node_index, to_replica_tx.clone(), from_replica_tx);
 
     let _ = spawn_all_node_tasks(
         client_addr,

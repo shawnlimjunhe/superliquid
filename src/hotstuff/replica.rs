@@ -6,7 +6,7 @@ use std::{
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::{
     pin,
-    sync::mpsc::{self, error::SendError},
+    sync::mpsc::{self},
     time::sleep,
 };
 
@@ -26,6 +26,38 @@ use super::{
     pacemaker::Pacemaker,
 };
 
+pub struct ReplicaSender {
+    pub replica_tx: mpsc::Sender<ReplicaInBound>,
+    pub node_tx: mpsc::Sender<ReplicaOutbound>,
+}
+
+impl ReplicaSender {
+    pub(super) async fn send_to_self(&self, msg: HotStuffMessage) -> Result<(), std::io::Error> {
+        self.replica_tx
+            .send(ReplicaInBound::HotStuff(msg))
+            .await
+            .map_err(|e| mpsc_error("Send to replica failed", e))
+    }
+
+    pub(super) async fn broadcast(&self, msg: HotStuffMessage) -> Result<(), std::io::Error> {
+        self.node_tx
+            .send(ReplicaOutbound::Broadcast(msg))
+            .await
+            .map_err(|e| mpsc_error("failed to send to node", e))
+    }
+
+    pub(super) async fn send_to_node(
+        &self,
+        node_id: usize,
+        msg: HotStuffMessage,
+    ) -> Result<(), std::io::Error> {
+        self.node_tx
+            .send(ReplicaOutbound::SendTo(node_id, msg))
+            .await
+            .map_err(|e| mpsc_error("failed to send to node", e))
+    }
+}
+
 pub type ViewNumber = u64;
 
 pub struct HotStuffReplica {
@@ -43,7 +75,7 @@ pub struct HotStuffReplica {
     pub messages: MessageWindow,
     pub pacemaker: Pacemaker,
 
-    node_sender: mpsc::Sender<ReplicaOutbound>,
+    pub rep_node_channel: ReplicaSender,
 
     // view specifc flag: for view idempotency
     proposed_for_curr_view: bool,
@@ -51,7 +83,11 @@ pub struct HotStuffReplica {
 }
 
 impl HotStuffReplica {
-    pub fn new(node_id: usize, node_sender: mpsc::Sender<ReplicaOutbound>) -> Self {
+    pub fn new(
+        node_id: usize,
+        replica_tx: mpsc::Sender<ReplicaInBound>,
+        node_tx: mpsc::Sender<ReplicaOutbound>,
+    ) -> Self {
         let signing_key = config::retrieve_signing_key_checked(node_id);
 
         let (genesis_block, genesis_qc) = Block::create_genesis_block();
@@ -74,7 +110,10 @@ impl HotStuffReplica {
             messages: MessageWindow::new(0),
 
             pacemaker: Pacemaker::new(),
-            node_sender,
+            rep_node_channel: ReplicaSender {
+                replica_tx,
+                node_tx,
+            },
 
             proposed_for_curr_view: false,
             voted_for_curr_view: false,
@@ -84,6 +123,11 @@ impl HotStuffReplica {
     fn reset_view_flags(&mut self) {
         self.proposed_for_curr_view = false;
         self.voted_for_curr_view = false;
+    }
+
+    fn advance_view(&mut self) {
+        self.pacemaker.advance_view();
+        self.reset_view_flags();
     }
 
     pub fn get_public_key(&self) -> VerifyingKey {
@@ -361,6 +405,8 @@ impl HotStuffReplica {
             self.pacemaker.curr_view
         );
 
+        let curr_view = self.pacemaker.curr_view;
+
         if msg.sender != self.pacemaker.get_leader_for_view(self.pacemaker.curr_view) {
             // could be a pending vote for the current proposal
             replica_debug!(
@@ -368,7 +414,7 @@ impl HotStuffReplica {
                 self.pacemaker.curr_view,
                 "msg sender: {:?} is not the leader. Leader is: {:?}",
                 msg.sender,
-                self.pacemaker.get_leader_for_view(self.pacemaker.curr_view)
+                self.pacemaker.get_leader_for_view(curr_view)
             );
             return None;
         }
@@ -489,11 +535,7 @@ impl HotStuffReplica {
         self.pacemaker.fast_forward_view(incoming_view)
     }
 
-    async fn handle_message(
-        &mut self,
-        msg: HotStuffMessage,
-        to_replica_tx: mpsc::Sender<ReplicaInBound>,
-    ) -> Result<(), SendError<ReplicaOutbound>> {
+    async fn handle_message(&mut self, msg: HotStuffMessage) -> Result<(), std::io::Error> {
         if self.sync_view(&msg) {
             replica_debug!(
                 self.node_id,
@@ -507,10 +549,7 @@ impl HotStuffReplica {
             if is_leader {
                 // Send new-view msg to self
                 let new_view_msg: HotStuffMessage = self.create_new_view();
-                let _ = to_replica_tx
-                    .send(ReplicaInBound::HotStuff(new_view_msg))
-                    .await
-                    .map_err(|e| mpsc_error("Send to replica failed", e));
+                self.rep_node_channel.send_to_self(new_view_msg).await?
             }
         }
 
@@ -548,8 +587,8 @@ impl HotStuffReplica {
                 return Ok(());
             };
 
-            self.node_sender
-                .send(ReplicaOutbound::Broadcast(leader_outbound_msg.clone()))
+            self.rep_node_channel
+                .broadcast(leader_outbound_msg.clone())
                 .await?;
             self.proposed_for_curr_view = true;
 
@@ -573,9 +612,10 @@ impl HotStuffReplica {
                 replica_outbound_msg.view_number
             );
 
-            self.node_sender
-                .send(ReplicaOutbound::SendTo(next_leader, replica_outbound_msg))
+            self.rep_node_channel
+                .send_to_node(next_leader, replica_outbound_msg)
                 .await?;
+
             self.voted_for_curr_view = true;
 
             return Ok(());
@@ -600,10 +640,7 @@ impl HotStuffReplica {
                 self.pacemaker.curr_view,
                 "Sending to self as node is next leader"
             );
-            let _ = to_replica_tx
-                .send(ReplicaInBound::HotStuff(outbound_msg))
-                .await
-                .map_err(|e| mpsc_error("Send to replica failed", e));
+            let _ = self.rep_node_channel.send_to_self(outbound_msg).await;
 
             self.voted_for_curr_view = true;
 
@@ -617,8 +654,8 @@ impl HotStuffReplica {
             next_leader,
         );
 
-        self.node_sender
-            .send(ReplicaOutbound::SendTo(next_leader, outbound_msg))
+        self.rep_node_channel
+            .send_to_node(next_leader, outbound_msg)
             .await?;
         Ok(())
     }
@@ -636,8 +673,7 @@ impl HotStuffReplica {
     pub async fn run_replica(
         &mut self,
         mut to_replica_rx: mpsc::Receiver<ReplicaInBound>,
-        to_replica_tx: mpsc::Sender<ReplicaInBound>,
-    ) -> Result<(), SendError<ReplicaOutbound>> {
+    ) -> Result<(), std::io::Error> {
         replica_log!(self.node_id, "Running replica...");
         loop {
             // Refresh pacemaker timer dynamically each loop
@@ -648,7 +684,7 @@ impl HotStuffReplica {
             tokio::select! {
                 Some(msg) = to_replica_rx.recv() => {
                     match msg {
-                        ReplicaInBound::HotStuff(msg) => self.handle_message(msg, to_replica_tx.clone()).await?,
+                        ReplicaInBound::HotStuff(msg) => self.handle_message(msg).await?,
                         ReplicaInBound::Transaction(tx) => {
                             self.mempool.push_back(tx);
                         }
@@ -657,23 +693,17 @@ impl HotStuffReplica {
 
                 _ = &mut pacemaker_timer => {
                     if self.pacemaker.should_advance_view() {
-                        self.pacemaker.advance_view();
-                        self.reset_view_flags();
 
+                        self.advance_view();
                         let leader = self.pacemaker.current_leader();
                         let outbound_msg = self.create_new_view();
 
                         if self.node_id == leader {
-                            let _ = to_replica_tx
-                                .send(ReplicaInBound::HotStuff(outbound_msg))
-                                .await
-                                .map_err(|e| mpsc_error("Send to replica failed", e));
+                            let _ = self.rep_node_channel.send_to_self(outbound_msg).await;
                             replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending self");
                         } else {
                             replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending to node: {:?} with msg view: {:?}", leader, outbound_msg.view_number);
-                            self.node_sender
-                                .send(ReplicaOutbound::SendTo(leader, outbound_msg))
-                                .await?;
+                            self.rep_node_channel.send_to_node(leader, outbound_msg).await?;
                         }
 
                     }
