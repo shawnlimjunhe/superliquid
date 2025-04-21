@@ -20,6 +20,7 @@ jobs:
       run: |
         {
           echo "TICK_DURATION=${{ secrets.TICK_DURATION }}" 
+          echo "MULTIPLICATIVE_FACTOR=${{ secrets.MULTIPLICATIVE_FACTOR }}" 
           echo "NUM_VALIDATORS=${{ secrets.NUM_VALIDATORS }}" 
           echo "PUBLIC_KEY_0=${{ secrets.PUBLIC_KEY_0 }}" 
           echo "SECRET_KEY_0=${{ secrets.SECRET_KEY_0 }}" 
