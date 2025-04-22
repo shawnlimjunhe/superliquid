@@ -42,6 +42,7 @@ pub async fn send_hotstuff_message(
     Ok(())
 }
 
+// Used for replicas to identify inbound connections
 pub async fn send_hello(
     writer: Arc<Mutex<OwnedWriteHalf>>,
     reader: Arc<Mutex<OwnedReadHalf>>,

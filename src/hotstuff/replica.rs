@@ -420,6 +420,7 @@ impl HotStuffReplica {
         }
 
         if msg.partial_sig.is_some() {
+            // we can optimistically fast forward here - TODO
             // vote message from leader for next view
             return None;
         }
