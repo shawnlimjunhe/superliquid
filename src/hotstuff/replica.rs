@@ -14,6 +14,7 @@ use crate::{
     config,
     hotstuff::utils,
     replica_debug, replica_log,
+    state::state::LedgerState,
     types::{ReplicaInBound, ReplicaOutbound, Sha256Hash, Transaction, mpsc_error},
 };
 
@@ -25,6 +26,8 @@ use super::{
     message_window::MessageWindow,
     pacemaker::Pacemaker,
 };
+
+pub type ViewNumber = u64;
 
 pub struct ReplicaSender {
     pub replica_tx: mpsc::Sender<ReplicaInBound>,
@@ -58,24 +61,26 @@ impl ReplicaSender {
     }
 }
 
-pub type ViewNumber = u64;
-
 pub struct HotStuffReplica {
     pub node_id: usize,
     pub validator_set: HashSet<VerifyingKey>,
     signing_key: SigningKey,
+    faucet_sk: SigningKey,
 
     generic_qc: Arc<QuorumCertificate>,
     locked_qc: Arc<QuorumCertificate>,
 
     current_proposal: Option<Block>,
-    blockstore: HashMap<BlockHash, Block>,
     mempool: VecDeque<Transaction>,
 
     pub messages: MessageWindow,
     pub pacemaker: Pacemaker,
 
     pub rep_node_channel: ReplicaSender,
+
+    // State
+    blockstore: HashMap<BlockHash, Block>,
+    ledger_state: LedgerState,
 
     // view specifc flag: for view idempotency
     proposed_for_curr_view: bool,
@@ -89,6 +94,7 @@ impl HotStuffReplica {
         node_tx: mpsc::Sender<ReplicaOutbound>,
     ) -> Self {
         let signing_key = config::retrieve_signing_key_checked(node_id);
+        let (_, faucet_sk) = config::retrieve_faucet_keys();
 
         let (genesis_block, genesis_qc) = Block::create_genesis_block();
         let mut blockstore: HashMap<BlockHash, Block> = HashMap::new();
@@ -99,6 +105,7 @@ impl HotStuffReplica {
             node_id,
             validator_set: config::retrieve_validator_set(),
             signing_key,
+            faucet_sk,
 
             generic_qc: genesis_qc.clone(),
             locked_qc: genesis_qc,
@@ -114,6 +121,8 @@ impl HotStuffReplica {
                 replica_tx,
                 node_tx,
             },
+
+            ledger_state: LedgerState::new(),
 
             proposed_for_curr_view: false,
             voted_for_curr_view: false,

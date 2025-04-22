@@ -56,6 +56,25 @@ pub fn retrieve_validator_set() -> HashSet<VerifyingKey> {
     validator_set
 }
 
+pub fn retrieve_faucet_keys() -> (VerifyingKey, SigningKey) {
+    dotenv().ok();
+    let env_key = format!("FAUCET_PK");
+    let pk_hex = env::var(env_key).expect("FAUCET_PK not set");
+    let pk_bytes = <[u8; 32]>::from_hex(&pk_hex).expect("Invalid hex");
+
+    let pk = VerifyingKey::from_bytes(&pk_bytes).expect("Invalid public key bytes");
+
+    let env_key = format!("FAUCET_SK");
+    let sk_hex = env::var(env_key).expect("FAUCET_SK not set");
+    let sk_bytes = <[u8; 32]>::from_hex(&sk_hex).expect("Invalid hex");
+
+    let sk = SigningKey::from_bytes(&sk_bytes);
+
+    (pk, sk)
+}
+
+// PACEMAKER
+
 pub fn retrieve_tick_duration() -> Duration {
     dotenv().ok();
 
