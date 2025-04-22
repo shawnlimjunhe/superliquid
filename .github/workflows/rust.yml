@@ -30,6 +30,8 @@ jobs:
           echo "SECRET_KEY_2=${{ secrets.SECRET_KEY_2 }}" 
           echo "PUBLIC_KEY_3=${{ secrets.PUBLIC_KEY_3 }}" 
           echo "SECRET_KEY_3=${{ secrets.SECRET_KEY_3 }}" 
+          echo "FAUCET_PK=${{ secrets.FAUCET_PK }}" 
+          echo "FAUCET_SK=${{ secrets.FAUCET_SK }}" 
         } | tee -a .env >> $GITHUB_ENV
 
     - uses: actions/checkout@v4
