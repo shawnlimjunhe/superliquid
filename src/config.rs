@@ -16,7 +16,7 @@ pub(crate) fn retrieve_verifying_key(node_id: usize) -> VerifyingKey {
 
 pub(crate) fn retrieve_signing_key(node_id: usize) -> SigningKey {
     dotenv().ok();
-    let env_key = format!("SECRET_KEY_{}", node_id);
+    let env_key: String = format!("SECRET_KEY_{}", node_id);
     let sk_hex = env::var(env_key).expect("SECRET_KEY not set");
     let sk_bytes = <[u8; 32]>::from_hex(&sk_hex).expect("Invalid hex");
 

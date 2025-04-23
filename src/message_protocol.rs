@@ -14,6 +14,7 @@ pub enum AppMessage {
     Query,
     SubmitTransaction(Transaction),
     Response(Vec<Transaction>),
+    Drip(String),
     Ack,
 }
 
@@ -67,6 +68,11 @@ pub async fn send_hello(
 
 pub async fn send_transaction(writer: Arc<Mutex<OwnedWriteHalf>>, tx: Transaction) -> Result<()> {
     let msg = AppMessage::SubmitTransaction(tx);
+    send_message(writer, &Message::Application(msg)).await
+}
+
+pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_hex: &str) -> Result<()> {
+    let msg = AppMessage::Drip(pk_hex.to_string());
     send_message(writer, &Message::Application(msg)).await
 }
 

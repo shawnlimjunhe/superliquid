@@ -28,12 +28,28 @@ pub(super) async fn handle_client_connection(
             Some(Message::Application(AppMessage::Query)) => {
                 handle_query(socket.writer.clone(), &node).await?;
             }
+            Some(Message::Application(AppMessage::Drip(pk))) => {
+                handle_drip(&node, pk, to_replica_tx.clone()).await?
+            }
             Some(Message::Connection(ControlMessage::End)) => {
                 return Ok(());
             }
             _ => {}
         }
     }
+}
+
+pub(super) async fn handle_drip(
+    node: &Arc<Node>,
+    pk_hex: String,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
+    let drip_txn = Transaction {
+        to: pk_hex,
+        from: "faucet".to_owned(),
+        amount: 100000,
+    };
+    handle_transaction(node, drip_txn, to_replica_tx).await
 }
 
 pub(super) async fn handle_transaction(

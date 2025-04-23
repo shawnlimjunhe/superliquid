@@ -6,6 +6,7 @@ use tokio::{
 };
 
 use crate::{
+    config,
     hotstuff::replica::HotStuffReplica,
     message_protocol::send_hello,
     types::{ReplicaInBound, ReplicaOutbound},
@@ -154,8 +155,10 @@ pub async fn run_node(
     // Bind the listener to the address
 
     let peers = Arc::new(peers);
+    let (_, sk) = config::retrieve_faucet_keys();
     let node = Arc::new(Node {
         id: node_index,
+        faucet_key: sk,
         transactions: Mutex::new(vec![]),
         seen_transactions: Mutex::new(HashSet::new()),
         peer_connections: RwLock::new(HashMap::new()),

@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use ed25519::Signature;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::{
     pin,
@@ -65,7 +66,6 @@ pub struct HotStuffReplica {
     pub node_id: usize,
     pub validator_set: HashSet<VerifyingKey>,
     signing_key: SigningKey,
-    faucet_sk: SigningKey,
 
     generic_qc: Arc<QuorumCertificate>,
     locked_qc: Arc<QuorumCertificate>,
@@ -94,7 +94,6 @@ impl HotStuffReplica {
         node_tx: mpsc::Sender<ReplicaOutbound>,
     ) -> Self {
         let signing_key = config::retrieve_signing_key_checked(node_id);
-        let (_, faucet_sk) = config::retrieve_faucet_keys();
 
         let (genesis_block, genesis_qc) = Block::create_genesis_block();
         let mut blockstore: HashMap<BlockHash, Block> = HashMap::new();
@@ -105,7 +104,6 @@ impl HotStuffReplica {
             node_id,
             validator_set: config::retrieve_validator_set(),
             signing_key,
-            faucet_sk,
 
             generic_qc: genesis_qc.clone(),
             locked_qc: genesis_qc,

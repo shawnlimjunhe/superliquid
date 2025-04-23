@@ -41,7 +41,7 @@ async fn main() {
     let _ = match args.get(1).map(|s| s.as_str()) {
         Some("node") => run_node(client_addr, consensus_addr, peers, node_index).await,
         Some("client") => client::run_client(&client_addr).await,
-        Some("console") => Ok(console::run_console()),
+        Some("console") => console::run_console().await,
         _ => {
             eprintln!("Usage: cargo run -- [node|client] [number]");
             Ok(())
