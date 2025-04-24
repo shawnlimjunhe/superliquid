@@ -3,17 +3,18 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex;
 
 use crate::hotstuff::message::HotStuffMessage;
+use crate::network;
 use crate::node::state::PeerId;
-use crate::types::Transaction;
-use crate::{network, types::Message};
+use crate::types::message::Message;
+use crate::types::transaction::UnsignedTransaction;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum AppMessage {
     Query,
-    SubmitTransaction(Transaction),
-    Response(Vec<Transaction>),
+    SubmitTransaction(UnsignedTransaction),
+    Response(Vec<UnsignedTransaction>),
     Drip(String),
     Ack,
 }
@@ -66,7 +67,10 @@ pub async fn send_hello(
     }
 }
 
-pub async fn send_transaction(writer: Arc<Mutex<OwnedWriteHalf>>, tx: Transaction) -> Result<()> {
+pub async fn send_transaction(
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    tx: UnsignedTransaction,
+) -> Result<()> {
     let msg = AppMessage::SubmitTransaction(tx);
     send_message(writer, &Message::Application(msg)).await
 }
@@ -79,7 +83,7 @@ pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_hex: &str) -> Resu
 pub async fn send_query(
     reader: Arc<Mutex<OwnedReadHalf>>,
     writer: Arc<Mutex<OwnedWriteHalf>>,
-) -> Result<Option<Vec<Transaction>>> {
+) -> Result<Option<Vec<UnsignedTransaction>>> {
     let msg = AppMessage::Query;
     send_message(writer, &Message::Application(msg)).await?;
 
@@ -104,11 +108,12 @@ pub async fn send_ack(writer: Arc<Mutex<OwnedWriteHalf>>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use tokio::net::{TcpListener, TcpStream};
 
-    fn make_transaction() -> Transaction {
-        Transaction {
+    fn make_transaction() -> UnsignedTransaction {
+        UnsignedTransaction {
             from: "alice".into(),
             to: "bob".into(),
             amount: 42,

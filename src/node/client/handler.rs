@@ -9,7 +9,10 @@ use tokio::{
 use crate::{
     message_protocol::{self, AppMessage, ControlMessage},
     node::{peer::broadcast::broadcast_transaction, state::Node},
-    types::{Message, ReplicaInBound, Transaction, mpsc_error},
+    types::{
+        message::{Message, ReplicaInBound, mpsc_error},
+        transaction::UnsignedTransaction,
+    },
 };
 
 use super::listener::ClientSocket;
@@ -44,7 +47,7 @@ pub(super) async fn handle_drip(
     pk_hex: String,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
-    let drip_txn = Transaction {
+    let drip_txn = UnsignedTransaction {
         to: pk_hex,
         from: "faucet".to_owned(),
         amount: 100000,
@@ -54,7 +57,7 @@ pub(super) async fn handle_drip(
 
 pub(super) async fn handle_transaction(
     node: &Arc<Node>,
-    tx: Transaction,
+    tx: UnsignedTransaction,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let logger = node.logger.clone();

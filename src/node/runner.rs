@@ -9,7 +9,7 @@ use crate::{
     config,
     hotstuff::replica::HotStuffReplica,
     message_protocol::send_hello,
-    types::{ReplicaInBound, ReplicaOutbound},
+    types::message::{ReplicaInBound, ReplicaOutbound},
 };
 
 use super::{

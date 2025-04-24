@@ -2,7 +2,7 @@ use std::io::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::types::ReplicaOutbound;
+use crate::types::message::ReplicaOutbound;
 
 use super::peer::broadcast::{broadcast_hotstuff_message, send_to_peer};
 use super::state::Node;

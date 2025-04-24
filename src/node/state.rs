@@ -4,14 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use ed25519::signature::SignerMut;
 use ed25519_dalek::SigningKey;
 use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
     sync::{Mutex, RwLock},
 };
 
-use crate::{hotstuff::utils, types::Transaction};
+use crate::types::transaction::UnsignedTransaction;
 
 pub type PeerId = usize;
 
@@ -33,10 +32,11 @@ impl PeerSocket {
     }
 }
 
+// Node handles the communication logic with the client and other nodes.
 pub struct Node {
     pub(super) id: PeerId,
     pub(crate) faucet_key: SigningKey,
-    pub(super) transactions: Mutex<Vec<Transaction>>,
+    pub(super) transactions: Mutex<Vec<UnsignedTransaction>>,
     pub(super) seen_transactions: Mutex<HashSet<[u8; 32]>>,
     pub(super) socket_peer_map: RwLock<HashMap<SocketAddr, PeerId>>,
     pub(super) peer_connections: RwLock<HashMap<PeerId, Arc<PeerSocket>>>, // For now, we skip peer discovery
@@ -49,9 +49,5 @@ impl Node {
             let peer_connections = self.peer_connections.read().await;
             peer_connections.values().cloned().collect()
         }
-    }
-
-    pub(crate) fn sign_faucet_transaction(&mut self, transaction: &Transaction) -> String {
-        utils::sig_to_string(&self.faucet_key.sign(&transaction.hash()))
     }
 }

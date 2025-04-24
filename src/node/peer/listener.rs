@@ -6,12 +6,10 @@ use tokio::{net::TcpListener, sync::mpsc};
 
 use crate::node::peer::handler::handle_handshake;
 use crate::node::state::{PeerId, PeerSocket};
-use crate::{
-    node::{
-        peer::handler::handle_peer_connection, runner::deduplicate_peer_connection, state::Node,
-    },
-    types::ReplicaInBound,
+use crate::node::{
+    peer::handler::handle_peer_connection, runner::deduplicate_peer_connection, state::Node,
 };
+use crate::types::message::ReplicaInBound;
 
 async fn drop_peer_socket(node: Arc<Node>, peer_id: PeerId) {
     let logger = node.logger.clone();

@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::{
     node::{client::handler::handle_client_connection, state::Node},
-    types::ReplicaInBound,
+    types::message::ReplicaInBound,
 };
 
 pub struct ClientSocket {

@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use crate::types::Sha256Hash;
 use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+
+use crate::types::transaction::Sha256Hash;
 
 use super::{block::BlockHash, hexstring, replica::ViewNumber};
 
@@ -117,7 +118,7 @@ mod tests {
 
     use crate::{
         hotstuff::{crypto::PartialSig, replica::ViewNumber},
-        types::Sha256Hash,
+        types::transaction::Sha256Hash,
     };
 
     use super::QuorumCertificate;

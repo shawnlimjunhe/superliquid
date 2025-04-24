@@ -9,10 +9,10 @@ use tokio::sync::mpsc;
 use crate::message_protocol::{ControlMessage, send_ack};
 use crate::node::logger::Logger;
 use crate::node::state::PeerId;
+use crate::types::message::{Message, ReplicaInBound, mpsc_error};
 use crate::{
     message_protocol::{self, AppMessage},
     node::state::Node,
-    types::{Message, ReplicaInBound, mpsc_error},
 };
 
 use super::broadcast::broadcast_transaction;

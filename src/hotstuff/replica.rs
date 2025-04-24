@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
 };
 
-use ed25519::Signature;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::{
     pin,
@@ -16,7 +15,10 @@ use crate::{
     hotstuff::utils,
     replica_debug, replica_log,
     state::state::LedgerState,
-    types::{ReplicaInBound, ReplicaOutbound, Sha256Hash, Transaction, mpsc_error},
+    types::{
+        message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
+        transaction::{Sha256Hash, UnsignedTransaction},
+    },
 };
 
 use super::{
@@ -71,7 +73,7 @@ pub struct HotStuffReplica {
     locked_qc: Arc<QuorumCertificate>,
 
     current_proposal: Option<Block>,
-    mempool: VecDeque<Transaction>,
+    mempool: VecDeque<UnsignedTransaction>,
 
     pub messages: MessageWindow,
     pub pacemaker: Pacemaker,
@@ -246,7 +248,7 @@ impl HotStuffReplica {
     }
 
     fn create_cmd(&mut self) -> ClientCommand {
-        let transactions: Vec<Transaction> = self.mempool.iter().cloned().take(1).collect();
+        let transactions: Vec<UnsignedTransaction> = self.mempool.iter().cloned().take(1).collect();
 
         if transactions.len() > 0 {
             let txn = &transactions[0];

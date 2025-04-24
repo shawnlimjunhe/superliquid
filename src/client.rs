@@ -5,7 +5,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex;
 
 use crate::message_protocol;
-use crate::types::Transaction;
+use crate::types::transaction::UnsignedTransaction;
 
 pub struct ClientConnection {
     pub reader: Arc<Mutex<OwnedReadHalf>>,
@@ -25,7 +25,7 @@ impl ClientConnection {
 }
 
 pub async fn run_client(addr: &str) -> std::io::Result<()> {
-    let tx = Transaction {
+    let tx = UnsignedTransaction {
         from: "alice".to_string(),
         to: "bob".to_string(),
         amount: 10,
@@ -43,7 +43,7 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
 
     println!("Sent transactions");
 
-    let txs_opt: Option<Vec<Transaction>> =
+    let txs_opt: Option<Vec<UnsignedTransaction>> =
         message_protocol::send_query(reader, writer.clone()).await?;
 
     match txs_opt {
