@@ -17,7 +17,7 @@ use crate::{
     state::state::LedgerState,
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{Sha256Hash, UnsignedTransaction},
+        transaction::{Sha256Hash, SignedTransaction},
     },
 };
 
@@ -73,7 +73,7 @@ pub struct HotStuffReplica {
     locked_qc: Arc<QuorumCertificate>,
 
     current_proposal: Option<Block>,
-    mempool: VecDeque<UnsignedTransaction>,
+    mempool: VecDeque<SignedTransaction>,
 
     pub messages: MessageWindow,
     pub pacemaker: Pacemaker,
@@ -248,7 +248,7 @@ impl HotStuffReplica {
     }
 
     fn create_cmd(&mut self) -> ClientCommand {
-        let transactions: Vec<UnsignedTransaction> = self.mempool.iter().cloned().take(1).collect();
+        let transactions: Vec<SignedTransaction> = self.mempool.iter().cloned().take(1).collect();
 
         if transactions.len() > 0 {
             let txn = &transactions[0];

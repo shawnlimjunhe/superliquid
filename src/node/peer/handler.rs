@@ -58,21 +58,21 @@ pub(super) async fn handle_peer_connection(
                     .map_err(|e| mpsc_error("Send to replica failed", e))?;
             }
             Ok(Some(Message::Application(app_message))) => match app_message {
-                AppMessage::SubmitTransaction(tx) => {
+                AppMessage::SubmitTransaction(signed_tx) => {
                     {
                         let mut seen_transactions = node.seen_transactions.lock().await;
-                        if seen_transactions.insert(tx.hash()) {
+                        if seen_transactions.insert(signed_tx.tx.hash()) {
                             {
                                 let mut transactions = node.transactions.lock().await;
-                                transactions.push(tx.clone());
+                                transactions.push(signed_tx.clone());
                             }
                         } else {
                             return Ok(());
                         }
                     }
-                    broadcast_transaction(&node, tx.clone()).await?;
+                    broadcast_transaction(&node, signed_tx.clone()).await?;
                     to_replica_tx
-                        .send(ReplicaInBound::Transaction(tx))
+                        .send(ReplicaInBound::Transaction(signed_tx))
                         .await
                         .map_err(|e| mpsc_error("Send to replica failed", e))?;
                 }

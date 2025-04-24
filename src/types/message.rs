@@ -8,7 +8,7 @@ use crate::{
     node::state::PeerId,
 };
 
-use super::transaction::UnsignedTransaction;
+use super::transaction::SignedTransaction;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
@@ -24,7 +24,7 @@ pub enum ReplicaOutbound {
 
 pub enum ReplicaInBound {
     HotStuff(HotStuffMessage),
-    Transaction(UnsignedTransaction),
+    Transaction(SignedTransaction),
 }
 
 pub fn mpsc_error<E: std::fmt::Display>(context: &str, err: E) -> io::Error {

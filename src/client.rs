@@ -37,22 +37,6 @@ pub async fn run_client(addr: &str) -> std::io::Result<()> {
     let reader = Arc::new(Mutex::new(reader));
     let writer = Arc::new(Mutex::new(writer));
 
-    println!("Connected to node");
-
-    let _ = message_protocol::send_transaction(writer.clone(), tx).await?;
-
-    println!("Sent transactions");
-
-    let txs_opt: Option<Vec<UnsignedTransaction>> =
-        message_protocol::send_query(reader, writer.clone()).await?;
-
-    match txs_opt {
-        Some(txs) => println!("Recieved Transactions: {:?}", txs),
-        None => println!("Recieved no Transaction"),
-    }
-
-    println!("Ending connection.");
-
     message_protocol::send_end(writer).await?;
 
     Ok(())

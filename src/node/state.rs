@@ -10,9 +10,9 @@ use tokio::{
     sync::{Mutex, RwLock},
 };
 
-use crate::types::transaction::UnsignedTransaction;
-
 pub type PeerId = usize;
+
+use crate::types::transaction::SignedTransaction;
 
 use super::logger::Logger;
 
@@ -36,7 +36,7 @@ impl PeerSocket {
 pub struct Node {
     pub(super) id: PeerId,
     pub(crate) faucet_key: SigningKey,
-    pub(super) transactions: Mutex<Vec<UnsignedTransaction>>,
+    pub(super) transactions: Mutex<Vec<SignedTransaction>>,
     pub(super) seen_transactions: Mutex<HashSet<[u8; 32]>>,
     pub(super) socket_peer_map: RwLock<HashMap<SocketAddr, PeerId>>,
     pub(super) peer_connections: RwLock<HashMap<PeerId, Arc<PeerSocket>>>, // For now, we skip peer discovery

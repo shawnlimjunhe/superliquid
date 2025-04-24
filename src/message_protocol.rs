@@ -6,15 +6,15 @@ use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
 use crate::types::message::Message;
-use crate::types::transaction::UnsignedTransaction;
+use crate::types::transaction::SignedTransaction;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum AppMessage {
     Query,
-    SubmitTransaction(UnsignedTransaction),
-    Response(Vec<UnsignedTransaction>),
+    SubmitTransaction(SignedTransaction),
+    Response(Vec<SignedTransaction>),
     Drip(String),
     Ack,
 }
@@ -69,7 +69,7 @@ pub async fn send_hello(
 
 pub async fn send_transaction(
     writer: Arc<Mutex<OwnedWriteHalf>>,
-    tx: UnsignedTransaction,
+    tx: SignedTransaction,
 ) -> Result<()> {
     let msg = AppMessage::SubmitTransaction(tx);
     send_message(writer, &Message::Application(msg)).await
@@ -83,7 +83,7 @@ pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_hex: &str) -> Resu
 pub async fn send_query(
     reader: Arc<Mutex<OwnedReadHalf>>,
     writer: Arc<Mutex<OwnedWriteHalf>>,
-) -> Result<Option<Vec<UnsignedTransaction>>> {
+) -> Result<Option<Vec<SignedTransaction>>> {
     let msg = AppMessage::Query;
     send_message(writer, &Message::Application(msg)).await?;
 
@@ -110,15 +110,8 @@ pub async fn send_ack(writer: Arc<Mutex<OwnedWriteHalf>>) -> Result<()> {
 mod tests {
 
     use super::*;
+    use crate::test_utils::test_helpers::make_transaction;
     use tokio::net::{TcpListener, TcpStream};
-
-    fn make_transaction() -> UnsignedTransaction {
-        UnsignedTransaction {
-            from: "alice".into(),
-            to: "bob".into(),
-            amount: 42,
-        }
-    }
 
     #[tokio::test]
     async fn test_send_and_receive_transaction() -> Result<()> {
@@ -132,8 +125,8 @@ mod tests {
 
             let msg = receive_message(reader).await.unwrap();
             match msg {
-                Some(Message::Application(AppMessage::SubmitTransaction(tx))) => {
-                    assert_eq!(tx.amount, 42);
+                Some(Message::Application(AppMessage::SubmitTransaction(signed_tx))) => {
+                    assert_eq!(signed_tx.amount, 42);
                 }
                 _ => panic!("Expected Transaction"),
             }

@@ -11,7 +11,7 @@ use crate::{
     node::{peer::broadcast::broadcast_transaction, state::Node},
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
-        transaction::UnsignedTransaction,
+        transaction::{SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -52,32 +52,35 @@ pub(super) async fn handle_drip(
         from: "faucet".to_owned(),
         amount: 100000,
     };
+
+    let mut faucet_key = node.faucet_key.clone();
+    let drip_txn = drip_txn.sign(&mut faucet_key);
     handle_transaction(node, drip_txn, to_replica_tx).await
 }
 
 pub(super) async fn handle_transaction(
     node: &Arc<Node>,
-    tx: UnsignedTransaction,
+    signed_tx: SignedTransaction,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let logger = node.logger.clone();
-    logger.log("info", &format!("Received Transaction: {:?}", tx));
+    logger.log("info", &format!("Received Transaction: {:?}", signed_tx));
 
     {
         let mut seen_transactions = node.seen_transactions.lock().await;
-        if seen_transactions.insert(tx.hash()) {
+        if seen_transactions.insert(signed_tx.tx.hash()) {
             {
                 let mut transactions = node.transactions.lock().await;
-                transactions.push(tx.clone());
+                transactions.push(signed_tx.clone());
             }
         } else {
             return Ok(());
         }
     }
 
-    broadcast_transaction(&node, tx.clone()).await?;
+    broadcast_transaction(&node, signed_tx.clone()).await?;
     to_replica_tx
-        .send(ReplicaInBound::Transaction(tx))
+        .send(ReplicaInBound::Transaction(signed_tx))
         .await
         .map_err(|e| mpsc_error("Send to replica failed", e))?;
 

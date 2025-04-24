@@ -61,6 +61,14 @@ impl SignedTransaction {
     }
 }
 
+impl Deref for SignedTransaction {
+    type Target = UnsignedTransaction;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SignatureString(String);
 

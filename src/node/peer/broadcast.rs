@@ -7,7 +7,7 @@ use crate::{
     hotstuff::message::HotStuffMessage,
     message_protocol::{send_message, send_transaction},
     node::state::{Node, PeerId},
-    types::{message::Message, transaction::UnsignedTransaction},
+    types::{message::Message, transaction::SignedTransaction},
 };
 
 /// Broadcast msg to all peer connections
@@ -43,7 +43,7 @@ pub(crate) async fn send_to_peer(
     send_message(peer_connection.writer.clone(), &Message::HotStuff(msg)).await
 }
 
-pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: UnsignedTransaction) -> Result<()> {
+pub(crate) async fn broadcast_transaction(node: &Arc<Node>, tx: SignedTransaction) -> Result<()> {
     let id = node.id;
     let logger = &node.logger.clone();
 
