@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 use crate::message_protocol::{ControlMessage, send_ack};
+use crate::node::client::handler::handle_transaction;
 use crate::node::logger::Logger;
 use crate::node::state::PeerId;
 use crate::types::message::{Message, ReplicaInBound, mpsc_error};
@@ -14,8 +15,6 @@ use crate::{
     message_protocol::{self, AppMessage},
     node::state::Node,
 };
-
-use super::broadcast::broadcast_transaction;
 
 pub(super) async fn handle_handshake(
     reader: Arc<Mutex<OwnedReadHalf>>,
@@ -59,22 +58,7 @@ pub(super) async fn handle_peer_connection(
             }
             Ok(Some(Message::Application(app_message))) => match app_message {
                 AppMessage::SubmitTransaction(signed_tx) => {
-                    {
-                        let mut seen_transactions = node.seen_transactions.lock().await;
-                        if seen_transactions.insert(signed_tx.tx.hash()) {
-                            {
-                                let mut transactions = node.transactions.lock().await;
-                                transactions.push(signed_tx.clone());
-                            }
-                        } else {
-                            return Ok(());
-                        }
-                    }
-                    broadcast_transaction(&node, signed_tx.clone()).await?;
-                    to_replica_tx
-                        .send(ReplicaInBound::Transaction(signed_tx))
-                        .await
-                        .map_err(|e| mpsc_error("Send to replica failed", e))?;
+                    handle_transaction(&node.clone(), signed_tx, to_replica_tx.clone()).await?;
                 }
                 AppMessage::Ack => (),
                 _ => logger.log(
@@ -96,22 +80,7 @@ pub(super) async fn handle_peer_connection(
                 ));
             }
             Err(e) => {
-                // log("Error", &format!("Peer {} disconnected: {:?}", peer_id, e));
-
                 return Err(e);
-                // sleep(time::Duration::from_millis(500)).await;
-
-                // match get_peer_info(node, peer_id) {
-                //     Some(peer_addr) => {
-                //         connect_to_peer(peer_addr, peer_id, node.clone(), node.log.clone()).await;
-                //     }
-                //     None => {
-                //         return Err(Error::new(
-                //             ErrorKind::NotFound,
-                //             format!("Peer address not found for peer id: {}", peer_id),
-                //         ));
-                //     }
-                // }
             }
         }
     }

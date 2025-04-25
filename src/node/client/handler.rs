@@ -59,7 +59,7 @@ pub(super) async fn handle_drip(
     handle_transaction(node, drip_txn, to_replica_tx).await
 }
 
-pub(super) async fn handle_transaction(
+pub(crate) async fn handle_transaction(
     node: &Arc<Node>,
     signed_tx: SignedTransaction,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
