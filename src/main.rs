@@ -1,5 +1,5 @@
 use superliquid::{
-    client, config, console,
+    config, console,
     node::{runner::run_node, state::PeerInfo},
 };
 
@@ -40,10 +40,9 @@ async fn main() {
 
     let _ = match args.get(1).map(|s| s.as_str()) {
         Some("node") => run_node(client_addr, consensus_addr, peers, node_index).await,
-        Some("client") => client::run_client(&client_addr).await,
-        Some("console") => console::run_console().await,
+        Some("console") => console::run_console(&client_addr).await,
         _ => {
-            eprintln!("Usage: cargo run -- [node|client] [number]");
+            eprintln!("Usage: cargo run -- [node|console] [number]");
             Ok(())
         }
     };

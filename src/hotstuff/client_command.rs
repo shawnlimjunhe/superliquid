@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::types::transaction::Sha256Hash;
+use crate::types::transaction::{PublicKeyString, Sha256Hash};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Action {
     Transfer {
-        from: String,
-        to: String,
+        from: PublicKeyString,
+        to: PublicKeyString,
         amount: u128,
     },
     Empty,
@@ -33,8 +33,8 @@ impl ClientCommand {
     pub(crate) fn create_empty_command() -> Self {
         ClientCommand {
             transactions: Action::Transfer {
-                from: "".to_owned(),
-                to: "".to_owned(),
+                from: PublicKeyString::default(),
+                to: PublicKeyString::default(),
                 amount: 0,
             },
         }

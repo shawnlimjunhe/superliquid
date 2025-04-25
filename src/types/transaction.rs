@@ -1,11 +1,8 @@
 use std::{fmt, ops::Deref};
 
-use ed25519::{
-    Signature,
-    signature::{self, SignerMut},
-};
+use ed25519::{Signature, signature::SignerMut};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use hex::FromHex;
+use hex::{FromHex, encode as hex_encode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -13,15 +10,15 @@ use crate::hotstuff::utils;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HashableTransaction {
-    pub from: String,
-    pub to: String,
+    pub from: PublicKeyString,
+    pub to: PublicKeyString,
     pub amount: u128,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UnsignedTransaction {
-    pub from: String,
-    pub to: String,
+    pub from: PublicKeyString,
+    pub to: PublicKeyString,
     pub amount: u128,
 }
 
@@ -53,7 +50,8 @@ pub struct SignedTransaction {
 }
 
 impl SignedTransaction {
-    pub fn verify(&self, public_key: &VerifyingKey) -> bool {
+    pub fn verify_sender(&self) -> bool {
+        let public_key = self.from.as_public_key();
         let tx_hash = self.tx.hash();
         let signature = utils::string_to_sig(&self.signature.as_str())
             .expect("Conversion from string to signature failed");
@@ -106,5 +104,58 @@ impl AsRef<str> for SignatureString {
 impl fmt::Display for SignatureString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct PublicKeyString(pub String);
+
+impl PublicKeyString {
+    pub fn from_public_key(pk: &VerifyingKey) -> Self {
+        let pk_string = hex_encode(pk.to_bytes());
+        PublicKeyString(pk_string)
+    }
+
+    pub fn from_string(s: String) -> Result<Self, &'static str> {
+        let bytes = <[u8; 32]>::from_hex(&s).map_err(|_| "Invalid hex")?;
+        VerifyingKey::from_bytes(&bytes).expect("Invalid hex");
+        Ok(PublicKeyString(s))
+    }
+
+    pub fn as_public_key(&self) -> VerifyingKey {
+        let bytes = <[u8; 32]>::from_hex(&self.0).unwrap();
+        VerifyingKey::from_bytes(&bytes).expect("Expect to be public key")
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Deref for PublicKeyString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PublicKeyString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PublicKeyString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Default for PublicKeyString {
+    fn default() -> Self {
+        PublicKeyString(
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        )
     }
 }

@@ -33,7 +33,6 @@ impl AccountInfo {
 
 pub struct LedgerState {
     pub accounts: HashMap<VerifyingKey, AccountInfo>,
-    pub account_alias: HashMap<String, VerifyingKey>,
 }
 
 impl LedgerState {
@@ -42,13 +41,7 @@ impl LedgerState {
         let mut accounts: HashMap<VerifyingKey, AccountInfo> = HashMap::new();
         accounts.insert(pk.clone(), AccountInfo::create_faucet());
 
-        let mut account_alias: HashMap<String, VerifyingKey> = HashMap::new();
-        account_alias.insert("faucet".to_string(), pk);
-
-        LedgerState {
-            accounts,
-            account_alias,
-        }
+        LedgerState { accounts }
     }
 
     // retrieves account info by public key, creates one if one doesn't exist
@@ -56,10 +49,5 @@ impl LedgerState {
         self.accounts
             .entry(public_key.clone())
             .or_insert_with(AccountInfo::new)
-    }
-
-    pub(crate) fn retrieve_by_alias(&mut self, alias: &str) -> Option<&AccountInfo> {
-        let pk = self.account_alias.get(alias)?.clone();
-        Some(self.retrieve_by_pk(&pk))
     }
 }

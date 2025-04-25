@@ -6,7 +6,7 @@ use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
 use crate::types::message::Message;
-use crate::types::transaction::SignedTransaction;
+use crate::types::transaction::{PublicKeyString, SignedTransaction};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ pub enum AppMessage {
     Query,
     SubmitTransaction(SignedTransaction),
     Response(Vec<SignedTransaction>),
-    Drip(String),
+    Drip(PublicKeyString),
     Ack,
 }
 
@@ -75,8 +75,8 @@ pub async fn send_transaction(
     send_message(writer, &Message::Application(msg)).await
 }
 
-pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_hex: &str) -> Result<()> {
-    let msg = AppMessage::Drip(pk_hex.to_string());
+pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_str: &PublicKeyString) -> Result<()> {
+    let msg = AppMessage::Drip(pk_str.clone());
     send_message(writer, &Message::Application(msg)).await
 }
 
@@ -110,7 +110,7 @@ pub async fn send_ack(writer: Arc<Mutex<OwnedWriteHalf>>) -> Result<()> {
 mod tests {
 
     use super::*;
-    use crate::test_utils::test_helpers::make_transaction;
+    use crate::test_utils::test_helpers::{get_alice_pk_str, make_alice_transaction};
     use tokio::net::{TcpListener, TcpStream};
 
     #[tokio::test]
@@ -133,7 +133,7 @@ mod tests {
         });
 
         let stream = TcpStream::connect(addr).await?;
-        let tx = make_transaction();
+        let tx = make_alice_transaction();
         let (_, writer) = stream.into_split();
         let writer = Arc::new(Mutex::new(writer));
         send_transaction(writer, tx).await
@@ -160,7 +160,7 @@ mod tests {
 
             match msg {
                 Message::Application(AppMessage::Query) => {
-                    let txs = vec![make_transaction()];
+                    let txs = vec![make_alice_transaction()];
                     println!("Received Query, sending response...");
                     send_message(writer, &Message::Application(AppMessage::Response(txs)))
                         .await
@@ -182,7 +182,7 @@ mod tests {
         let txs = txs_opt.expect("Expected Some(transaction), got None");
 
         assert_eq!(txs.len(), 1);
-        assert_eq!(txs[0].from, "alice");
+        assert_eq!(txs[0].from, get_alice_pk_str());
 
         Ok(())
     }

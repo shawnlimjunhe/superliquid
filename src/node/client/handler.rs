@@ -11,7 +11,7 @@ use crate::{
     node::{peer::broadcast::broadcast_transaction, state::Node},
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
-        transaction::{SignedTransaction, UnsignedTransaction},
+        transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -44,16 +44,17 @@ pub(super) async fn handle_client_connection(
 
 pub(super) async fn handle_drip(
     node: &Arc<Node>,
-    pk_hex: String,
+    pk_hex: PublicKeyString,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
+    let mut faucet_key = node.faucet_key.clone();
+
     let drip_txn = UnsignedTransaction {
         to: pk_hex,
-        from: "faucet".to_owned(),
+        from: PublicKeyString::from_public_key(&faucet_key.verifying_key()),
         amount: 100000,
     };
 
-    let mut faucet_key = node.faucet_key.clone();
     let drip_txn = drip_txn.sign(&mut faucet_key);
     handle_transaction(node, drip_txn, to_replica_tx).await
 }
@@ -66,9 +67,11 @@ pub(super) async fn handle_transaction(
     let logger = node.logger.clone();
     logger.log("info", &format!("Received Transaction: {:?}", signed_tx));
 
+    signed_tx.verify_sender();
+
     {
         let mut seen_transactions = node.seen_transactions.lock().await;
-        if seen_transactions.insert(signed_tx.tx.hash()) {
+        if seen_transactions.insert(signed_tx.hash()) {
             {
                 let mut transactions = node.transactions.lock().await;
                 transactions.push(signed_tx.clone());
