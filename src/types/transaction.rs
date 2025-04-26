@@ -107,7 +107,7 @@ impl fmt::Display for SignatureString {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct PublicKeyString(pub String);
 
 impl PublicKeyString {

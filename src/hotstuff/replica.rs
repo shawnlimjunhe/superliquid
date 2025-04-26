@@ -74,6 +74,8 @@ pub struct HotStuffReplica {
 
     current_proposal: Option<Block>,
     mempool: VecDeque<SignedTransaction>,
+    pending_transactions: HashMap<Sha256Hash, SignedTransaction>,
+    committed_transactions: HashMap<Sha256Hash, SignedTransaction>,
 
     pub messages: MessageWindow,
     pub pacemaker: Pacemaker,
@@ -113,6 +115,8 @@ impl HotStuffReplica {
             current_proposal: None,
             blockstore,
             mempool: VecDeque::new(),
+            pending_transactions: HashMap::new(),
+            committed_transactions: HashMap::new(),
 
             messages: MessageWindow::new(0),
 
@@ -248,21 +252,24 @@ impl HotStuffReplica {
     }
 
     fn create_cmd(&mut self) -> ClientCommand {
-        let transactions: Vec<SignedTransaction> = self.mempool.iter().cloned().take(1).collect();
+        let transactions_opt = self.mempool.pop_front();
 
-        if transactions.len() > 0 {
-            let txn = &transactions[0];
-            return ClientCommand {
-                transactions: Action::Transfer {
-                    from: txn.from.clone(),
-                    to: txn.to.clone(),
-                    amount: txn.amount,
-                },
-            };
+        match transactions_opt {
+            Some(txn) => {
+                let cmd = ClientCommand {
+                    transactions: Action::Transfer {
+                        from: txn.from.clone(),
+                        to: txn.to.clone(),
+                        amount: txn.amount,
+                    },
+                };
+                self.pending_transactions.insert(txn.hash(), txn);
+                return cmd;
+            }
+            None => ClientCommand {
+                transactions: Action::Empty,
+            },
         }
-        return ClientCommand {
-            transactions: Action::Empty,
-        };
     }
 
     fn leader_create_message(&mut self, new_block: Block) -> HotStuffMessage {
@@ -521,21 +528,25 @@ impl HotStuffReplica {
             .set_last_committed_view(self.locked_qc.clone());
 
         // b := b′.justify.node
-        let Some(b) = self.get_justified_block(&b_prime) else {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Missing b justified by b′"
-            );
-            return outbound_msg;
+        let commited_block = {
+            let Some(b) = self.get_justified_block(&b_prime) else {
+                replica_debug!(
+                    self.node_id,
+                    self.pacemaker.curr_view,
+                    "Missing b justified by b′"
+                );
+                return outbound_msg;
+            };
+
+            if !self.is_parent(&b_prime, b) {
+                return outbound_msg;
+            }
+            b.clone()
         };
 
-        if !self.is_parent(&b_prime, b) {
-            return outbound_msg;
-        }
-
         replica_log!(self.node_id, "Commit success on view: {:?}", curr_view);
-        // do commit here
+
+        self.ledger_state.apply_block(&commited_block);
 
         return outbound_msg;
     }

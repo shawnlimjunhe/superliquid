@@ -32,11 +32,7 @@ impl ClientCommand {
 
     pub(crate) fn create_empty_command() -> Self {
         ClientCommand {
-            transactions: Action::Transfer {
-                from: PublicKeyString::default(),
-                to: PublicKeyString::default(),
-                amount: 0,
-            },
+            transactions: Action::Empty {},
         }
     }
 }

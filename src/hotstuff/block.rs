@@ -98,6 +98,13 @@ impl Block {
         }
     }
 
+    pub fn get_command(&self) -> &ClientCommand {
+        match self {
+            Block::Genesis { cmd, .. } => cmd,
+            Block::Normal { cmd, .. } => cmd,
+        }
+    }
+
     pub fn create_genesis_block() -> (Block, QuorumCertificate) {
         let qc = crypto::QuorumCertificate::create_genesis_qc();
 
