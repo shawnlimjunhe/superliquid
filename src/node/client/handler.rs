@@ -11,7 +11,9 @@ use crate::{
     node::{peer::broadcast::broadcast_transaction, state::Node},
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
-        transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction},
+        transaction::{
+            PublicKeyString, SignedTransaction, TransferTransaction, UnsignedTransaction,
+        },
     },
 };
 
@@ -49,11 +51,11 @@ pub(super) async fn handle_drip(
 ) -> Result<()> {
     let mut faucet_key = node.faucet_key.clone();
 
-    let drip_txn = UnsignedTransaction {
+    let drip_txn = UnsignedTransaction::Transfer(TransferTransaction {
         to: pk_hex,
         from: PublicKeyString::from_public_key(&faucet_key.verifying_key()),
         amount: 100000,
-    };
+    });
 
     let drip_txn = drip_txn.sign(&mut faucet_key);
     handle_transaction(node, drip_txn, to_replica_tx).await

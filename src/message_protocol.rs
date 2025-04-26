@@ -126,7 +126,14 @@ mod tests {
             let msg = receive_message(reader).await.unwrap();
             match msg {
                 Some(Message::Application(AppMessage::SubmitTransaction(signed_tx))) => {
-                    assert_eq!(signed_tx.amount, 42);
+                    match &signed_tx.tx {
+                        crate::types::transaction::UnsignedTransaction::Transfer(
+                            transfer_transaction,
+                        ) => assert_eq!(transfer_transaction.amount, 42),
+                        crate::types::transaction::UnsignedTransaction::Empty => {
+                            panic!("Expected Transfer transaction")
+                        }
+                    }
                 }
                 _ => panic!("Expected Transaction"),
             }
@@ -182,7 +189,15 @@ mod tests {
         let txs = txs_opt.expect("Expected Some(transaction), got None");
 
         assert_eq!(txs.len(), 1);
-        assert_eq!(txs[0].from, get_alice_pk_str());
+        let first_tx = &txs[0];
+        match &first_tx.tx {
+            crate::types::transaction::UnsignedTransaction::Transfer(transfer_transaction) => {
+                assert_eq!(transfer_transaction.from, get_alice_pk_str());
+            }
+            crate::types::transaction::UnsignedTransaction::Empty => {
+                panic!("Expected Transfer transaction")
+            }
+        }
 
         Ok(())
     }

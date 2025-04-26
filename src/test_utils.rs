@@ -1,7 +1,9 @@
 #[cfg(test)]
 pub mod test_helpers {
 
-    use crate::types::transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction};
+    use crate::types::transaction::{
+        PublicKeyString, SignedTransaction, TransferTransaction, UnsignedTransaction,
+    };
     use hex::FromHex;
 
     use ed25519_dalek::SigningKey;
@@ -35,11 +37,11 @@ pub mod test_helpers {
     }
 
     pub fn make_alice_transaction() -> SignedTransaction {
-        let unsigned_txn = UnsignedTransaction {
+        let unsigned_txn = UnsignedTransaction::Transfer(TransferTransaction {
             from: get_alice_pk_str(),
             to: get_bob_pk_str(),
             amount: 42,
-        };
+        });
         unsigned_txn.sign(&mut get_alice_sk())
     }
 }

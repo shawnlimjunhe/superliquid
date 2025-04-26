@@ -2,11 +2,8 @@ use std::collections::HashMap;
 
 use crate::{
     config,
-    hotstuff::{
-        block::Block,
-        client_command::{Action, ClientCommand},
-    },
-    types::transaction::PublicKeyString,
+    hotstuff::block::Block,
+    types::transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction},
 };
 
 pub type Balance = u128;
@@ -68,30 +65,29 @@ impl LedgerState {
             .or_insert_with(AccountInfo::new)
     }
 
-    pub(crate) fn apply(&mut self, action: &Action) -> Result<(), ExecError> {
-        match action {
-            Action::Transfer { from, to, amount } => {
-                let from_info = self.retrieve_by_pk_mut(&from);
-                if from_info.balance < *amount {
+    pub(crate) fn apply(&mut self, transaction: &SignedTransaction) -> Result<(), ExecError> {
+        match &transaction.tx {
+            UnsignedTransaction::Transfer(tx) => {
+                let from_info = self.retrieve_by_pk_mut(&tx.from);
+                if from_info.balance < tx.amount {
                     return Err(ExecError::InsufficientFunds {
-                        from: from.clone(),
+                        from: tx.from.clone(),
                         have: from_info.balance,
-                        need: *amount,
+                        need: tx.amount,
                     });
                 }
-                from_info.balance -= amount;
+                from_info.balance -= tx.amount;
 
-                let to_info = self.retrieve_by_pk_mut(&to);
-                to_info.balance += amount;
+                let to_info = self.retrieve_by_pk_mut(&tx.to);
+                to_info.balance += tx.amount;
 
                 Ok(())
             }
-            Action::Empty => Ok(()),
+            UnsignedTransaction::Empty => Ok(()),
         }
     }
 
     pub(crate) fn apply_block(&mut self, block: &Block) {
-        let cmd: &ClientCommand = block.get_command();
-        let _ = self.apply(&cmd.transactions);
+        let _ = self.apply(&block.transactions());
     }
 }

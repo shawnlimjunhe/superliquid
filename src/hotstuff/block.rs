@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{hotstuff::client_command::ClientCommand, types::transaction::Sha256Hash};
+use crate::types::transaction::{Sha256Hash, SignedTransaction};
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -14,35 +15,37 @@ pub type BlockHash = Sha256Hash;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Block {
     Genesis {
-        cmd: ClientCommand,
+        transactions: SignedTransaction,
         view_number: ViewNumber,
         justify: QuorumCertificate,
     },
     Normal {
         parent_id: BlockHash,
-        cmd: ClientCommand,
+        transactions: SignedTransaction,
         view_number: ViewNumber,
         justify: QuorumCertificate,
+        // proposer: PublicKeyString,
+        // block_hash: TODO
     },
 }
 
 #[derive(Serialize, Deserialize)]
 struct HashableBlock {
     parent_id: BlockHash,
-    cmd_hash: Sha256Hash,
+    txns_hash: Sha256Hash,
     view_number: ViewNumber,
 }
 
 impl Block {
     pub fn create_leaf(
         parent: &Block,
-        cmd: ClientCommand,
+        transactions: SignedTransaction,
         view_number: ViewNumber,
         justify: QuorumCertificate,
     ) -> Self {
         return Self::Normal {
             parent_id: parent.hash(),
-            cmd,
+            transactions,
             view_number,
             justify,
         };
@@ -82,13 +85,13 @@ impl Block {
             Self::Genesis { .. } => Sha256::digest(b"GENESIS").into(),
             Self::Normal {
                 parent_id,
-                cmd,
+                transactions,
                 view_number,
                 ..
             } => {
                 let hashable = HashableBlock {
                     parent_id: *parent_id,
-                    cmd_hash: cmd.hash(),
+                    txns_hash: transactions.hash(),
                     view_number: *view_number,
                 };
 
@@ -98,20 +101,20 @@ impl Block {
         }
     }
 
-    pub fn get_command(&self) -> &ClientCommand {
+    pub fn transactions(&self) -> &SignedTransaction {
         match self {
-            Block::Genesis { cmd, .. } => cmd,
-            Block::Normal { cmd, .. } => cmd,
+            Block::Genesis { transactions, .. } => transactions,
+            Block::Normal { transactions, .. } => transactions,
         }
     }
 
-    pub fn create_genesis_block() -> (Block, QuorumCertificate) {
+    pub fn create_genesis_block(signing_key: &mut SigningKey) -> (Block, QuorumCertificate) {
         let qc = crypto::QuorumCertificate::create_genesis_qc();
 
         let genesis = Block::Genesis {
-            cmd: ClientCommand::create_empty_command(),
             view_number: 0,
             justify: qc.clone(),
+            transactions: SignedTransaction::create_empty_signed_transaction(signing_key),
         };
         return (genesis, qc);
     }

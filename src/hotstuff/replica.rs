@@ -23,7 +23,6 @@ use crate::{
 
 use super::{
     block::{Block, BlockHash},
-    client_command::{Action, ClientCommand},
     crypto::{PartialSig, QuorumCertificate},
     message::HotStuffMessage,
     message_window::MessageWindow,
@@ -97,9 +96,9 @@ impl HotStuffReplica {
         replica_tx: mpsc::Sender<ReplicaInBound>,
         node_tx: mpsc::Sender<ReplicaOutbound>,
     ) -> Self {
-        let signing_key = config::retrieve_signing_key_checked(node_id);
+        let mut signing_key = config::retrieve_signing_key_checked(node_id);
 
-        let (genesis_block, genesis_qc) = Block::create_genesis_block();
+        let (genesis_block, genesis_qc) = Block::create_genesis_block(&mut signing_key);
         let mut blockstore: HashMap<BlockHash, Block> = HashMap::new();
         blockstore.insert(genesis_block.hash(), genesis_block.clone());
 
@@ -251,25 +250,22 @@ impl HotStuffReplica {
         extends || newer_qc
     }
 
-    fn create_cmd(&mut self) -> ClientCommand {
-        let transactions_opt = self.mempool.pop_front();
+    fn select_transactions(&mut self) -> SignedTransaction {
+        while self.mempool.len() > 0 {
+            let transactions_opt = self.mempool.pop_front();
+            let Some(txn) = transactions_opt else {
+                return SignedTransaction::create_empty_signed_transaction(&mut self.signing_key);
+            };
 
-        match transactions_opt {
-            Some(txn) => {
-                let cmd = ClientCommand {
-                    transactions: Action::Transfer {
-                        from: txn.from.clone(),
-                        to: txn.to.clone(),
-                        amount: txn.amount,
-                    },
-                };
-                self.pending_transactions.insert(txn.hash(), txn);
-                return cmd;
+            let txn_hash = txn.hash();
+            if self.pending_transactions.contains_key(&txn_hash)
+                || self.committed_transactions.contains_key(&txn_hash)
+            {
+                continue;
             }
-            None => ClientCommand {
-                transactions: Action::Empty,
-            },
+            return txn;
         }
+        return SignedTransaction::create_empty_signed_transaction(&mut self.signing_key);
     }
 
     fn leader_create_message(&mut self, new_block: Block) -> HotStuffMessage {
@@ -323,7 +319,7 @@ impl HotStuffReplica {
             "Leader handle message at view: {:?}",
             curr_view
         );
-        let cmd: &ClientCommand = &self.create_cmd();
+        let selected_transactions = &self.select_transactions();
 
         self.pacemaker.reset_timer();
 
@@ -363,8 +359,12 @@ impl HotStuffReplica {
             };
 
             let curr_view = self.pacemaker.curr_view;
-            let new_block =
-                Block::create_leaf(parent, cmd.clone(), curr_view, (*self.generic_qc).clone());
+            let new_block = Block::create_leaf(
+                parent,
+                selected_transactions.clone(),
+                curr_view,
+                (*self.generic_qc).clone(),
+            );
 
             self.blockstore.insert(new_block.hash(), new_block.clone());
 
