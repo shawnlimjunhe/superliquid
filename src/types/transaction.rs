@@ -335,7 +335,7 @@ mod tests {
         #[test]
         fn test_signed_transaction_wrong_sender_fails() {
             let (mut sk1, _vk1) = generate_keypair();
-            let (sk2, vk2) = generate_keypair(); // wrong key
+            let (_sk2, vk2) = generate_keypair(); // wrong key
 
             let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
                 from: PublicKeyString::from_public_key(&vk2), // set from wrong key

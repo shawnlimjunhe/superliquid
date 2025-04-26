@@ -17,7 +17,7 @@ use crate::{
     state::state::LedgerState,
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{Sha256Hash, SignedTransaction},
+        transaction::{self, Sha256Hash, SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -250,6 +250,7 @@ impl HotStuffReplica {
         extends || newer_qc
     }
 
+    /// Selects a transaction from the mempool and
     fn select_transactions(&mut self) -> SignedTransaction {
         while self.mempool.len() > 0 {
             let transactions_opt = self.mempool.pop_front();
@@ -263,6 +264,7 @@ impl HotStuffReplica {
             {
                 continue;
             }
+            self.pending_transactions.insert(txn_hash, txn.clone());
             return txn;
         }
         return SignedTransaction::create_empty_signed_transaction(&mut self.signing_key);
@@ -310,6 +312,38 @@ impl HotStuffReplica {
             Block::Genesis { .. } => false,
             Block::Normal { parent_id, .. } => block_parent.hash() == *parent_id,
         }
+    }
+    fn add_block_transactions_to_pending(&mut self, block: &Block) {
+        let transactions = block.transactions();
+
+        match transactions.tx {
+            UnsignedTransaction::Transfer(_) => self
+                .pending_transactions
+                .insert(transactions.hash, transactions.clone()),
+            UnsignedTransaction::Empty => None,
+        };
+    }
+
+    fn add_block_transactions_to_committed(&mut self, block: &Block) {
+        let transactions = block.transactions();
+
+        match transactions.tx {
+            UnsignedTransaction::Transfer(_) => self
+                .committed_transactions
+                .insert(transactions.hash, transactions.clone()),
+            UnsignedTransaction::Empty => None,
+        };
+    }
+
+    fn remove_block_transactions_from_pending(&mut self, block: &Block) {
+        let transactions = block.transactions();
+
+        match transactions.tx {
+            UnsignedTransaction::Transfer(_) => {
+                self.pending_transactions.remove_entry(&transactions.hash)
+            }
+            UnsignedTransaction::Empty => None,
+        };
     }
 
     pub fn leader_handle_message(&mut self) -> Option<HotStuffMessage> {
@@ -473,18 +507,9 @@ impl HotStuffReplica {
 
         if is_safe && is_valid_sig {
             outbound_msg = Some(self.vote_message(&b_star, None));
+            self.add_block_transactions_to_pending(&b_star);
             replica_debug!(self.node_id, self.pacemaker.curr_view, "voting for block",);
         } else {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "is_safe: {:?}, is_valid_sig: {:?}",
-                is_safe,
-                is_valid_sig
-            );
-            if !is_valid_sig {
-                println!("{:?}", &b_star_justify)
-            }
             return outbound_msg;
         }
 
@@ -545,8 +570,15 @@ impl HotStuffReplica {
         };
 
         replica_log!(self.node_id, "Commit success on view: {:?}", curr_view);
-
+        replica_debug!(
+            self.node_id,
+            self.pacemaker.curr_view,
+            "Applying transaction, {:?}",
+            &commited_block.transactions()
+        );
         self.ledger_state.apply_block(&commited_block);
+        self.remove_block_transactions_from_pending(&commited_block);
+        self.add_block_transactions_to_committed(&commited_block);
 
         return outbound_msg;
     }
@@ -584,14 +616,14 @@ impl HotStuffReplica {
             );
         }
 
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "Recieved message: {:?} with view: {:?} from node-id: {:?}",
-            msg.partial_sig,
-            msg.view_number,
-            msg.sender,
-        );
+        // replica_debug!(
+        //     self.node_id,
+        //     self.pacemaker.curr_view,
+        //     "Recieved message: {:?} with view: {:?} from node-id: {:?}",
+        //     msg.partial_sig,
+        //     msg.view_number,
+        //     msg.sender,
+        // );
 
         self.messages.push(msg.clone());
 
