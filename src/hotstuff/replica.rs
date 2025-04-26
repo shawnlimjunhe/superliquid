@@ -13,11 +13,12 @@ use tokio::{
 use crate::{
     config,
     hotstuff::utils,
+    node::client::handler::{ClientResponse, QueryRequest},
     replica_debug, replica_log,
-    state::state::LedgerState,
+    state::state::{AccountInfo, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{self, Sha256Hash, SignedTransaction, UnsignedTransaction},
+        transaction::{PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -144,6 +145,10 @@ impl HotStuffReplica {
 
     pub fn get_public_key(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
+    }
+
+    pub fn get_account_info(&self, public_key: &PublicKeyString) -> AccountInfo {
+        self.ledger_state.retrieve_by_pk(public_key)
     }
 
     fn sign(&self, message: &HotStuffMessage) -> PartialSig {
@@ -317,10 +322,11 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         match transactions.tx {
-            UnsignedTransaction::Transfer(_) => self
-                .pending_transactions
-                .insert(transactions.hash, transactions.clone()),
-            UnsignedTransaction::Empty => None,
+            UnsignedTransaction::Transfer(_) => {
+                self.pending_transactions
+                    .insert(transactions.hash, transactions.clone());
+            }
+            UnsignedTransaction::Empty => (),
         };
     }
 
@@ -620,7 +626,7 @@ impl HotStuffReplica {
         //     self.node_id,
         //     self.pacemaker.curr_view,
         //     "Recieved message: {:?} with view: {:?} from node-id: {:?}",
-        //     msg.partial_sig,
+        //     msg.node,
         //     msg.view_number,
         //     msg.sender,
         // );
@@ -723,6 +729,15 @@ impl HotStuffReplica {
         )
     }
 
+    fn handle_query(&self, query_request: QueryRequest) {
+        let query = query_request.query;
+        let account_info = self.get_account_info(&query.account);
+
+        let _ = query_request
+            .response_channel
+            .send(ClientResponse { account_info });
+    }
+
     pub async fn run_replica(
         &mut self,
         mut to_replica_rx: mpsc::Receiver<ReplicaInBound>,
@@ -740,6 +755,9 @@ impl HotStuffReplica {
                         ReplicaInBound::HotStuff(msg) => self.handle_message(msg).await?,
                         ReplicaInBound::Transaction(tx) => {
                             self.mempool.push_back(tx);
+                        },
+                        ReplicaInBound::Query(query) => {
+                            self.handle_query(query);
                         }
                     }
                 },

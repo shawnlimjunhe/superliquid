@@ -95,6 +95,30 @@ fn handle_transfer(trimmed: &str, client: &Option<ClientAccount>) {
     }
 }
 
+async fn handle_query(
+    client: &Option<ClientAccount>,
+    client_connection: &ClientConnection,
+) -> std::io::Result<()> {
+    let Some(client) = client else {
+        println!("Please create or load an account before transferring.");
+        return Ok(());
+    };
+
+    let account_info = message_protocol::send_account_query(
+        client.pk_str.clone(),
+        client_connection.reader.clone(),
+        client_connection.writer.clone(),
+    )
+    .await?;
+
+    print!(
+        "Account: {:?}, balance: {:?}",
+        client.pk_str, account_info.balance
+    );
+
+    return Ok(());
+}
+
 pub async fn run_console(addr: &str) -> std::io::Result<()> {
     const ANSI_ESC: &str = "\x1B[2J\x1B[1;1H";
     print!("{}", ANSI_ESC);
@@ -116,9 +140,10 @@ pub async fn run_console(addr: &str) -> std::io::Result<()> {
                 client_account = Some(handle_create());
             }
             _ if trimmed.starts_with("load ") => client_account = Some(handle_load(trimmed)),
-            _ if trimmed.starts_with("drip ") => {
+            "drip" => {
                 handle_drip(&client_account, connection.writer.clone()).await?;
             }
+            "query" => handle_query(&client_account, &connection).await?,
             _ if trimmed.starts_with("transfer ") => handle_transfer(trimmed, &client_account),
             "quit" | "q" => return Ok(()),
             _ => println!("Unknown command. Type `help` for options."),
