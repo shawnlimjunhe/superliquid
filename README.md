@@ -63,7 +63,7 @@ cd superliquid
 cargo build
 ```
 
-3. **Run Tests** (If available) 
+3. **Run Tests** (If desired) 
 ```bash
 cargo test
 ```
@@ -82,6 +82,22 @@ cargo run -- node 1   // run node 1
 cargo run -- node 2   // run node 2  
 cargo run -- node 3   // run node 3  
 ```
+
+### Running the Client Console
+You can run a **client console** to interact with the network by starting a console instance (functionality is still barebones):
+
+```bash
+cargo run -- console 0
+```
+
+The client console lets you:
+
+- Create/load accounts (Ed25519 keypairs)
+- Request a drip (faucet funding) - Current only support 1 drip
+- Transfer tokens between accounts (WIP)
+- Query your account balance
+  
+After starting the console, type `help` to see available commands.
 
 
 ### Setup Keys with `.env`
