@@ -87,7 +87,8 @@ fn handle_transfer(trimmed: &str, client: &Option<ClientAccount>) {
         println!("Please create or load an account before transferring.");
         return;
     };
-    println!("This part is a todo!");
+    println!("This part is still a todo!");
+    return;
 
     let parts: Vec<&str> = trimmed["transfer ".len()..].split_whitespace().collect();
     if parts.len() == 3 {
