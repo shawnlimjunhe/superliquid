@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
+use crate::state::state::AccountInfo;
 use crate::types::message::Message;
 use crate::types::transaction::{PublicKeyString, SignedTransaction};
 use std::io::{Error, ErrorKind, Result};
@@ -17,6 +18,8 @@ pub enum AppMessage {
     Response(Vec<SignedTransaction>),
     Drip(PublicKeyString),
     Ack,
+    AccountQuery(PublicKeyString),
+    AccountQueryResponse(AccountInfo),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -78,6 +81,25 @@ pub async fn send_transaction(
 pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_str: &PublicKeyString) -> Result<()> {
     let msg = AppMessage::Drip(pk_str.clone());
     send_message(writer, &Message::Application(msg)).await
+}
+
+pub async fn send_account_query(
+    account_public_key: PublicKeyString,
+    reader: Arc<Mutex<OwnedReadHalf>>,
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+) -> Result<AccountInfo> {
+    let msg = AppMessage::AccountQuery(account_public_key);
+    send_message(writer, &Message::Application(msg)).await?;
+
+    match receive_message(reader).await? {
+        Some(Message::Application(AppMessage::AccountQueryResponse(account_info))) => {
+            Ok(account_info)
+        }
+        other => Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Expected Response, got {:?}", other),
+        )),
+    }
 }
 
 pub async fn send_query(

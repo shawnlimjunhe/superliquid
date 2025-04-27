@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     config,
     hotstuff::block::Block,
@@ -9,6 +11,7 @@ use crate::{
 pub type Balance = u128;
 pub type Nonce = u64;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AccountInfo {
     pub balance: Balance,
     pub nonce: Nonce,
@@ -56,6 +59,10 @@ impl LedgerState {
         );
 
         LedgerState { accounts }
+    }
+
+    pub(crate) fn retrieve_by_pk(&self, public_key: &PublicKeyString) -> AccountInfo {
+        self.accounts.get(public_key).cloned().unwrap_or_default()
     }
 
     // retrieves account info by public key, creates one if one doesn't exist

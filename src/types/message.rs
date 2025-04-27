@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     hotstuff::message::HotStuffMessage,
     message_protocol::{AppMessage, ControlMessage},
-    node::state::PeerId,
+    node::{client::handler::QueryRequest, state::PeerId},
 };
 
 use super::transaction::SignedTransaction;
@@ -25,6 +25,7 @@ pub enum ReplicaOutbound {
 pub enum ReplicaInBound {
     HotStuff(HotStuffMessage),
     Transaction(SignedTransaction),
+    Query(QueryRequest),
 }
 
 pub fn mpsc_error<E: std::fmt::Display>(context: &str, err: E) -> io::Error {
