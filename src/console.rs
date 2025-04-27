@@ -77,6 +77,7 @@ fn handle_load(trimmed: &str) -> ClientAccount {
 
     let signing_key = SigningKey::from_bytes(&sk_bytes);
     let client_account = ClientAccount::new(signing_key);
+
     println!("Account loaded: {}", client_account.pk_str);
     client_account
 }
@@ -86,6 +87,7 @@ fn handle_transfer(trimmed: &str, client: &Option<ClientAccount>) {
         println!("Please create or load an account before transferring.");
         return;
     };
+    println!("This part is a todo!");
 
     let parts: Vec<&str> = trimmed["transfer ".len()..].split_whitespace().collect();
     if parts.len() == 3 {
