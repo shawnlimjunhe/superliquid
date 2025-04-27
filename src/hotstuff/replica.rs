@@ -359,7 +359,6 @@ impl HotStuffReplica {
             "Leader handle message at view: {:?}",
             curr_view
         );
-        let selected_transactions = &self.select_transactions();
 
         self.pacemaker.reset_timer();
 
@@ -388,19 +387,24 @@ impl HotStuffReplica {
                 None => {}
             };
 
-            let Some(parent) = self.blockstore.get(&self.generic_qc.block_hash) else {
-                // cant find QC's block
-                replica_debug!(
-                    self.node_id,
-                    self.pacemaker.curr_view,
-                    "cant find qc's block: L"
-                );
-                return None;
+            let parent = {
+                let Some(parent) = self.blockstore.get(&self.generic_qc.block_hash) else {
+                    // cant find QC's block
+                    replica_debug!(
+                        self.node_id,
+                        self.pacemaker.curr_view,
+                        "cant find qc's block: L"
+                    );
+                    return None;
+                };
+                parent.clone()
             };
+
+            let selected_transactions = &self.select_transactions();
 
             let curr_view = self.pacemaker.curr_view;
             let new_block = Block::create_leaf(
-                parent,
+                &parent,
                 selected_transactions.clone(),
                 curr_view,
                 (*self.generic_qc).clone(),
@@ -514,16 +518,15 @@ impl HotStuffReplica {
         if is_safe && is_valid_sig {
             outbound_msg = Some(self.vote_message(&b_star, None));
             self.add_block_transactions_to_pending(&b_star);
-            replica_debug!(self.node_id, self.pacemaker.curr_view, "voting for block",);
+            replica_debug!(
+                self.node_id,
+                self.pacemaker.curr_view,
+                "voting for block, b*: {:?}",
+                b_star.transactions()
+            );
         } else {
             return outbound_msg;
         }
-
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "Start pre-commit phase on b*'s parent",
-        );
 
         if !self.is_parent(&b_star, &b_double_prime) {
             return outbound_msg;

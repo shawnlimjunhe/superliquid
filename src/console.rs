@@ -111,7 +111,7 @@ async fn handle_query(
     )
     .await?;
 
-    print!(
+    println!(
         "Account: {:?}, balance: {:?}",
         client.pk_str, account_info.balance
     );
