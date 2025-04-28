@@ -80,6 +80,7 @@ pub async fn send_transaction(
 
 pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_str: &PublicKeyString) -> Result<()> {
     let msg = AppMessage::Drip(pk_str.clone());
+
     send_message(writer, &Message::Application(msg)).await
 }
 

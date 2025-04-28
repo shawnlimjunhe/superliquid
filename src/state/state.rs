@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use crate::{
     config,
@@ -43,6 +42,10 @@ pub enum ExecError {
         have: u128,
         need: u128,
     },
+    DuplicateNonce {
+        from: PublicKeyString,
+        nonce: Nonce,
+    },
 }
 
 pub struct LedgerState {
@@ -72,29 +75,50 @@ impl LedgerState {
             .or_insert_with(AccountInfo::new)
     }
 
-    pub(crate) fn apply(&mut self, transaction: &SignedTransaction) -> Result<(), ExecError> {
+    pub(crate) fn apply(
+        &mut self,
+        transaction: &SignedTransaction,
+    ) -> Result<Vec<(PublicKeyString, Nonce)>, ExecError> {
+        let mut account_nonces: Vec<(PublicKeyString, Nonce)> = vec![];
+
         match &transaction.tx {
             UnsignedTransaction::Transfer(tx) => {
                 let from_info = self.retrieve_by_pk_mut(&tx.from);
                 if from_info.balance < tx.amount {
+                    println!("Insufficient Funds");
                     return Err(ExecError::InsufficientFunds {
                         from: tx.from.clone(),
                         have: from_info.balance,
                         need: tx.amount,
                     });
                 }
+
+                if from_info.nonce + 1 != tx.nonce {
+                    println!("Duplicate nonce");
+                    return Err(ExecError::DuplicateNonce {
+                        from: tx.from.clone(),
+                        nonce: tx.nonce,
+                    });
+                }
+
                 from_info.balance -= tx.amount;
+                from_info.nonce += 1;
+                let new_nonce = from_info.nonce;
 
                 let to_info = self.retrieve_by_pk_mut(&tx.to);
                 to_info.balance += tx.amount;
 
-                Ok(())
+                account_nonces.push((tx.from.clone(), new_nonce));
+                Ok(account_nonces)
             }
-            UnsignedTransaction::Empty => Ok(()),
+            UnsignedTransaction::Empty => Ok(account_nonces),
         }
     }
 
-    pub(crate) fn apply_block(&mut self, block: &Block) {
-        let _ = self.apply(&block.transactions());
+    pub(crate) fn apply_block(&mut self, block: &Block) -> Vec<(PublicKeyString, Nonce)> {
+        match self.apply(&block.transactions()) {
+            Ok(v) => return v,
+            Err(_) => return vec![],
+        }
     }
 }
