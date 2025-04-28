@@ -10,6 +10,8 @@ use crate::{
 /// BTreeMap is used to efficiently find the smallest (next expected) nonce for an account.
 /// - Fast insertion O(log n) and fast retrieval of next txn.
 /// - Nonce order is critical for correctness.
+/// - The number of pending transactions per account is expected to be small (typically a few transactions),
+///   ensuring efficient O(log n) performance even with a BTreeMap.
 pub type AccountQueue = BTreeMap<Nonce, SignedTransaction>;
 
 const PRIORITY_LEVELS: u8 = 3;
