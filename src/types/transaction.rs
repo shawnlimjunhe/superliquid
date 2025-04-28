@@ -6,14 +6,7 @@ use hex::{FromHex, encode as hex_encode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::hotstuff::utils;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct HashableTransaction {
-    pub from: PublicKeyString,
-    pub to: PublicKeyString,
-    pub amount: u128,
-}
+use crate::{hotstuff::utils, state::state::Nonce};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UnsignedTransaction {
@@ -26,6 +19,7 @@ pub struct TransferTransaction {
     pub from: PublicKeyString,
     pub to: PublicKeyString,
     pub amount: u128,
+    pub nonce: Nonce,
 }
 
 pub type Sha256Hash = [u8; 32];
@@ -206,6 +200,7 @@ mod tests {
             from: PublicKeyString::from_public_key(&vk),
             to: PublicKeyString::default(),
             amount: 42,
+            nonce: 0,
         });
 
         let tx2 = tx1.clone();
@@ -223,6 +218,7 @@ mod tests {
             from: PublicKeyString::from_public_key(&vk),
             to: PublicKeyString::default(),
             amount: 100,
+            nonce: 0,
         });
 
         let signed = unsigned.sign(&mut sk);
@@ -248,6 +244,7 @@ mod tests {
             from: PublicKeyString::from_public_key(&vk),
             to: PublicKeyString::default(),
             amount: 200,
+            nonce: 0,
         });
 
         let signed = unsigned.sign(&mut sk);
@@ -302,6 +299,7 @@ mod tests {
             from: PublicKeyString::from_public_key(&vk),
             to: PublicKeyString::default(),
             amount: 123,
+            nonce: 0,
         });
         let tx2 = tx1.clone();
 
@@ -315,12 +313,14 @@ mod tests {
             from: PublicKeyString::from_public_key(&vk),
             to: PublicKeyString::default(),
             amount: 123,
+            nonce: 0,
         });
 
         let tx2 = UnsignedTransaction::Transfer(TransferTransaction {
             from: PublicKeyString::from_public_key(&vk),
             to: PublicKeyString::default(),
             amount: 456,
+            nonce: 0,
         });
 
         assert_ne!(
@@ -341,6 +341,7 @@ mod tests {
                 from: PublicKeyString::from_public_key(&vk2), // set from wrong key
                 to: PublicKeyString::default(),
                 amount: 100,
+                nonce: 0,
             });
 
             let signed = unsigned.sign(&mut sk1);
@@ -360,12 +361,14 @@ mod tests {
                 from: PublicKeyString::from_public_key(&vk1),
                 to: PublicKeyString::default(),
                 amount: 50,
+                nonce: 0,
             });
 
             let unsigned2 = UnsignedTransaction::Transfer(TransferTransaction {
                 from: PublicKeyString::from_public_key(&vk2),
                 to: PublicKeyString::default(),
                 amount: 50,
+                nonce: 0,
             });
 
             let signed1 = unsigned1.sign(&mut sk1);
@@ -396,6 +399,7 @@ mod tests {
                 from: PublicKeyString::from_public_key(&vk),
                 to: PublicKeyString::default(),
                 amount: 777,
+                nonce: 0,
             });
 
             let hash_before = unsigned.hash();
