@@ -5,19 +5,46 @@ use crate::{
     types::transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction},
 };
 
+/// Per-account transaction queue, ordered by nonce.
+///
+/// BTreeMap is used to efficiently find the smallest (next expected) nonce for an account.
+/// - Fast insertion O(log n) and fast retrieval of next txn.
+/// - Nonce order is critical for correctness.
 pub type AccountQueue = BTreeMap<Nonce, SignedTransaction>;
-const PRIORITY_LEVELS: u8 = 3;
 
-pub struct PriorityMempool {
-    account_queues: HashMap<PublicKeyString, AccountQueue>,
-    priority_buckets: [VecDeque<SignedTransaction>; PRIORITY_LEVELS as usize],
-}
+const PRIORITY_LEVELS: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Priority {
     Liquidation = 0,
     Cancel = 1,
     Other = 2,
+}
+
+/// PriorityMempool organizes transactions for fast block proposal selection.
+///
+/// # Design Goals
+/// - Prioritize urgent actions (e.g., liquidations) before normal transfers.
+/// - Enforce strict per-account nonce ordering.
+/// - Allow efficient lookup, insertion, and promotion of ready transactions.
+/// - Support asynchronous transaction submission and network asynchrony.
+///
+/// # Mempool Invariants
+/// - For each `(account, nonce)`:
+///   - At most one future transaction (nonce > expected) exists in `account_queues`, enforced by BTreeMap semantics.
+///   - Multiple ready-to-execute transactions (for the current expected nonce) may temporarily exist across the mempool, pending transactions, and new submissions.
+///     - This occurs because a transaction may leave the mempool for block proposal (pending state),
+///       but the LedgerState's account nonce is only updated after final execution.
+/// - Final uniqueness and validity are enforced at execution time by the LedgerState.
+/// - Re-submission of transactions for previously executed nonces is not allowed.
+/// - Transactions are immediately removed from `account_queues` after execution.
+/// - Memory safety is guaranteed by strict immediate removal of executed transactions, preventing stale references.
+pub struct PriorityMempool {
+    account_queues: HashMap<PublicKeyString, AccountQueue>,
+    /// VecDeque is chosen for fast push/pop from both ends.
+    /// - Liquidations and cancels are processed first.
+    /// - Transfers are processed after urgent actions are handled.
+    priority_buckets: [VecDeque<(PublicKeyString, Nonce)>; PRIORITY_LEVELS as usize],
 }
 
 impl PriorityMempool {
@@ -33,12 +60,6 @@ impl PriorityMempool {
         match &txn.tx {
             UnsignedTransaction::Transfer(transfer_tx) => {
                 if transfer_tx.nonce < expected_nonce {
-                    // reject stale transaction
-                    return;
-                }
-
-                if transfer_tx.nonce == expected_nonce {
-                    self.priority_buckets[Priority::Other as usize].push_back(txn);
                     return;
                 }
 
@@ -46,12 +67,13 @@ impl PriorityMempool {
                     .account_queues
                     .entry(transfer_tx.from.clone())
                     .or_default();
-                account.insert(transfer_tx.nonce, txn);
 
-                // We might have the correct transaction here, if so remove from account_queue and add to ready transactions
-                if let Some(txn) = account.remove(&expected_nonce) {
-                    self.priority_buckets[Priority::Other as usize].push_back(txn);
+                if transfer_tx.nonce == expected_nonce {
+                    self.priority_buckets[Priority::Other as usize]
+                        .push_back((transfer_tx.from.clone(), expected_nonce));
                 }
+
+                account.insert(transfer_tx.nonce, txn);
             }
             UnsignedTransaction::Empty => {}
         }
@@ -59,8 +81,11 @@ impl PriorityMempool {
 
     pub fn pop_next(&mut self) -> Option<SignedTransaction> {
         for priority in [Priority::Liquidation, Priority::Cancel, Priority::Other] {
-            if let Some(txn) = self.priority_buckets[priority as usize].pop_front() {
-                return Some(txn);
+            if let Some((pk, nonce)) = self.priority_buckets[priority as usize].pop_front() {
+                match self.account_queues.get_mut(&pk) {
+                    Some(account_queue) => return account_queue.remove(&nonce),
+                    None => return None,
+                }
             }
         }
         None
@@ -80,11 +105,10 @@ impl PriorityMempool {
                 continue;
             };
 
-            let Some(txn) = account.remove(expected_nonce) else {
-                continue;
-            };
-
-            self.priority_buckets[Priority::Other as usize].push_back(txn);
+            if account.contains_key(expected_nonce) {
+                self.priority_buckets[Priority::Other as usize]
+                    .push_back((pk.clone(), *expected_nonce));
+            }
         }
     }
 }
