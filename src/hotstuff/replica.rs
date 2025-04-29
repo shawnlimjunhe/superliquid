@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     sync::Arc,
 };
 
@@ -25,6 +25,7 @@ use crate::{
 use super::{
     block::{Block, BlockHash},
     crypto::{PartialSig, QuorumCertificate},
+    mempool::PriorityMempool,
     message::HotStuffMessage,
     message_window::MessageWindow,
     pacemaker::Pacemaker,
@@ -73,7 +74,7 @@ pub struct HotStuffReplica {
     locked_qc: Arc<QuorumCertificate>,
 
     current_proposal: Option<Block>,
-    mempool: VecDeque<SignedTransaction>,
+    mempool: PriorityMempool,
     pending_transactions: HashMap<Sha256Hash, SignedTransaction>,
     committed_transactions: HashMap<Sha256Hash, SignedTransaction>,
 
@@ -114,7 +115,7 @@ impl HotStuffReplica {
 
             current_proposal: None,
             blockstore,
-            mempool: VecDeque::new(),
+            mempool: PriorityMempool::new(),
             pending_transactions: HashMap::new(),
             committed_transactions: HashMap::new(),
 
@@ -258,17 +259,16 @@ impl HotStuffReplica {
     /// Selects a transaction from the mempool and
     fn select_transactions(&mut self) -> SignedTransaction {
         while self.mempool.len() > 0 {
-            let transactions_opt = self.mempool.pop_front();
-            let Some(txn) = transactions_opt else {
+            let Some(txn) = self.mempool.pop_next() else {
                 return SignedTransaction::create_empty_signed_transaction(&mut self.signing_key);
             };
-
             let txn_hash = txn.hash();
             if self.pending_transactions.contains_key(&txn_hash)
                 || self.committed_transactions.contains_key(&txn_hash)
             {
                 continue;
             }
+
             self.pending_transactions.insert(txn_hash, txn.clone());
             return txn;
         }
@@ -585,9 +585,10 @@ impl HotStuffReplica {
             "Applying transaction, {:?}",
             &commited_block.transactions()
         );
-        self.ledger_state.apply_block(&commited_block);
+        let account_nonces = self.ledger_state.apply_block(&commited_block);
         self.remove_block_transactions_from_pending(&commited_block);
         self.add_block_transactions_to_committed(&commited_block);
+        self.mempool.update_after_execution(account_nonces);
 
         return outbound_msg;
     }
@@ -741,6 +742,16 @@ impl HotStuffReplica {
             .send(ClientResponse { account_info });
     }
 
+    fn handle_transaction(&mut self, txn: SignedTransaction) {
+        match &txn.tx {
+            UnsignedTransaction::Transfer(transfer_transaction) => {
+                let account_info = self.ledger_state.retrieve_by_pk(&transfer_transaction.from);
+                self.mempool.insert(txn, account_info.nonce + 1);
+            }
+            UnsignedTransaction::Empty => println!("Unexpected empty transaction"),
+        }
+    }
+
     pub async fn run_replica(
         &mut self,
         mut to_replica_rx: mpsc::Receiver<ReplicaInBound>,
@@ -757,7 +768,7 @@ impl HotStuffReplica {
                     match msg {
                         ReplicaInBound::HotStuff(msg) => self.handle_message(msg).await?,
                         ReplicaInBound::Transaction(tx) => {
-                            self.mempool.push_back(tx);
+                            self.handle_transaction(tx);
                         },
                         ReplicaInBound::Query(query) => {
                             self.handle_query(query);

@@ -10,11 +10,14 @@ A Rust implementation of a **Byzantine Fault Tolerant (BFT)** consensus protocol
 
 1. [Overview](#overview)  
 2. [Key Features](#key-features)  
-3. [Getting Started](#getting-started)  
-4. [Usage](#usage)  
-5. [Roadmap](#roadmap)  
-6. [License](#license)  
-7. [References](#references)
+3. [Architecture](#architecture)
+4. [Key Components](#key-components)
+5. [Design Decisions](#design-decisions)
+6. [Getting Started](#getting-started)  
+7. [Usage](#usage)  
+8. [Roadmap](#roadmap)  
+9. [License](#license)  
+10. [References](#references)
 
 ---
 
@@ -38,6 +41,93 @@ The purpose of this project is to learn, experiment, and demonstrate a BFT conse
 - **Exponential Timeouts**: If the protocol doesn’t make progress in a view, replicas increase their timeout before moving to the next view.
 - **View Synchronization**: Fast-forward logic ensures that once any replica observes a higher-view message, it jumps to that view to maintain synchronization.
 - **Eventual Safety and Liveness**: Adheres to the HotStuff design, ensuring that honest replicas eventually agree on a final sequence of blocks.
+
+---
+## Architecture
+
+Each replica node is split into two main layers:
+
+- **Consensus Layer**  
+  Handles HotStuff logic: block proposals, voting, view advancement, QC formation, block commitment and state management.
+
+- **Networking and Communication Layer**  
+  Manages peer-to-peer TCP connections for consensus messages and client RPC handling, including automatic reconnection.
+
+System Data Flow:
+
+```text
+Client Transactions
+    ↓
+PriorityMempool (transaction staging and prioritization)
+    ↓
+Replica Logic (leader election, block proposal, voting)
+    ↓
+MessageWindow (view-based message caching)
+    ↓
+LedgerState (validated transaction application)
+    ↓
+Committed Blocks (persisted final state)
+```
+
+
+---
+
+## Key components
+### Replica
+- Orchestrates block proposal and voting based on the current leader and view number.
+- Interfaces with pacemaker, mempool, and ledger state.
+
+### Pacemaker
+- Drives view advancement based on timeouts.
+- Triggers leader rotation and synchronizes view progression across replicas.
+
+### PriorityMempool
+- Manages transaction ordering by account nonce.
+- Prioritizes urgent operations (i.e. liquidations, cancels) over normal transfers.
+
+### MessageWindow
+- Buffers Hotstuff messages per view.
+- Enables efficient quorum certificate formation and view synchronization.
+- Supports fast pruning of obsolete views to maintain bounded memory usage.
+
+### LedgerState
+- Validates and applies transactions atomically on committed blocks.
+- Maintains nonce, balance, and account data for consistency.
+
+---
+
+## Design Decisions
+
+### Consensus Model
+- Implements chained HotStuff for pipelined block progress with reduced view latency.
+- Enforces safety (no conflicting commits) and liveness (eventual commit under partial synchrony) by following core HotStuff invariants.
+
+### Pacemaker
+- Uses exponential backoff timers to handle partial synchrony and avoid view lockstep issues.
+- Fast-forwarding enables replicas to synchronize with minimal downtime.
+
+### PriorityMempool
+- Organizes pending transactions by per-account nonce, enforcing strict sequential execution, while allowing for replacement of inflight pending transaction if needed.
+- Prioritizes urgent actions (e.g., liquidations, cancels) over normal transfers.
+- Designed for future scalability: insertion is O(log n) per account, and per-account queue sizes are expected to remain small. 
+Future improvements:
+- Enforce a hard cap on pending transactions per account to mitigate spam attacks.
+- Support bundling multiple sequential transactions per account into a single block to improve liquidation throughput.
+
+### MessageWindow
+- Maintains recent HotStuff messages in a memory-local `VecDeque<Vec<_>>` structure, optimized for fast insertion and pruning.
+- Supports non-contiguous view arrivals (i.e., missing views) without breaking indexing invariants.
+- Enables constant-time lookup of messages by view number, critical for quorum checking.
+- Future improvements: 
+  - Deduplicate view messages by (message type, validator) to reduce memory usage.
+  - Limit MessageWindow size to defend against high-frequency view changes.
+
+
+
+### Networking and State Management
+- Built on `tokio` async primitives to support concurrent peer connections and message passing.
+- Ledger state is updated only on committed blocks, ensuring consistency across replicas.
+- Transactions are validated against the ledger state during block execution to ensure determinism.
 
 ---
 
@@ -93,9 +183,11 @@ cargo run -- console 0
 The client console lets you:
 
 - Create/load accounts (Ed25519 keypairs)
-- Request a drip (faucet funding) - Current only support 1 drip
-- Transfer tokens between accounts (WIP)
+- Request a drip (faucet funding)
 - Query your account balance
+
+The transfer functionality is under development (WIP).
+
   
 After starting the console, type `help` to see available commands.
 
@@ -120,12 +212,21 @@ You can monitor the console output to see:
 
 ## Roadmap
 
-- [ ] **Client Transactions**: Allow clients to send token transfers between accounts.
-- [ ] **State Validation**: Validate balances and persist the resulting state in each committed block.
-- [ ] **Performance Tuning**: Profile and optimize message passing, QC handling, and view transitions.
-- [x] **Chained HotStuff**: Refactor the 4-phase pipeline into a pipelined (chained) HotStuff variant for improved throughput.
-- [ ] **HotStuff 2 Upgrade**: Integrate enhancements from HotStuff2, including optimistic responsiveness and speculative execution.
-- [ ] **State Persistence**: Write committed blocks and ledger state to disk.
+**Consensus Improvements**
+- [x] Chained HotStuff: Pipelined block progress with reduced view latency.
+- [ ] Implement transaction bundling: allow multiple sequential transactions from an account per block.
+- [ ] Integrate HotStuff 2 enhancements (optimistic responsiveness, speculative execution).
+- [ ] Add block and ledger persistence to disk.
+
+**Performance Tuning**
+- [ ] Profile and optimize network throughput and view synchronization latency.
+- [ ] Introduce bounded memory policies for MessageWindow under high view churn.
+
+**Resynchronization**
+- [ ] Allow replicas to resync to current ledger state on reconnect or crash recovery.
+
+**Mempool Improvements**
+- [ ] Enforce per-account pending transaction limits to defend against spam attacks.
 
 ---
 

@@ -60,17 +60,19 @@ pub(super) async fn handle_client_connection(
         }
     }
 }
-pub(super) async fn handle_account_query(
-    writer: Arc<Mutex<OwnedWriteHalf>>,
-    pk_hex: PublicKeyString,
+
+pub(super) async fn send_query_to_replica(
+    pk_hex: &PublicKeyString,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
-) -> Result<()> {
+) -> Result<ClientResponse> {
     let (response_tx, response_rx) = oneshot::channel();
 
     // Request info from replica to oneshot channel
     to_replica_tx
         .send(ReplicaInBound::Query(QueryRequest {
-            query: ClientQuery { account: pk_hex },
+            query: ClientQuery {
+                account: pk_hex.clone(),
+            },
             response_channel: response_tx,
         }))
         .await
@@ -80,7 +82,15 @@ pub(super) async fn handle_account_query(
     let response = response_rx
         .await
         .map_err(|e| mpsc_error("Failed to recieve response from replica", e))?;
+    return Ok(response);
+}
 
+pub(super) async fn handle_account_query(
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    pk_hex: PublicKeyString,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
+    let response = send_query_to_replica(&pk_hex, to_replica_tx).await?;
     // send to client
     message_protocol::send_message(
         writer,
@@ -95,11 +105,15 @@ pub(super) async fn handle_drip(
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let mut faucet_key = node.faucet_key.clone();
+    let faucet_pk_str = PublicKeyString::from_public_key(&faucet_key.verifying_key());
+
+    let response = send_query_to_replica(&faucet_pk_str, to_replica_tx.clone()).await?;
 
     let drip_txn = UnsignedTransaction::Transfer(TransferTransaction {
         to: pk_hex,
         from: PublicKeyString::from_public_key(&faucet_key.verifying_key()),
         amount: 100000,
+        nonce: response.account_info.nonce + 1,
     });
 
     let drip_txn = drip_txn.sign(&mut faucet_key);

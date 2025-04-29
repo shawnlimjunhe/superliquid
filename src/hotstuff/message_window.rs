@@ -1,7 +1,22 @@
 use std::collections::{VecDeque, vec_deque};
 
 use super::{message::HotStuffMessage, replica::ViewNumber};
-
+/// MessageWindow maintains recent HotStuff messages in a sliding window indexed by view number.
+///
+/// # Design Goals
+/// - Efficiently store and retrieve messages grouped by view.
+/// - Support fast pruning of outdated views as consensus advances.
+/// - Maximize memory locality and cache efficiency.
+/// - Handle gaps between views without requiring strict continuity.
+///
+/// # Data Structures
+/// - `VecDeque<Vec<HotStuffMessage>>`:
+///   - Outer `VecDeque` holds messages for consecutive views, starting from `lowest_view`.
+///   - Inner `Vec<HotStuffMessage>` stores all messages for a specific view.
+///   - Chosen over `LinkedList` for better memory locality.
+/// - `lowest_view: ViewNumber`:
+///   - Maps logical view numbers to VecDeque indices in constant time.
+///   - Advances when old views are pruned.
 pub struct MessageWindow {
     // use a vecDeque instead of a linkedlist here for memory locality
     pub messages: VecDeque<Vec<HotStuffMessage>>,
