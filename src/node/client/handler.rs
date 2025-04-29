@@ -105,8 +105,9 @@ pub(super) async fn handle_drip(
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let mut faucet_key = node.faucet_key.clone();
+    let faucet_pk_str = PublicKeyString::from_public_key(&faucet_key.verifying_key());
 
-    let response = send_query_to_replica(&pk_hex, to_replica_tx.clone()).await?;
+    let response = send_query_to_replica(&faucet_pk_str, to_replica_tx.clone()).await?;
 
     let drip_txn = UnsignedTransaction::Transfer(TransferTransaction {
         to: pk_hex,
