@@ -11,7 +11,7 @@ use tokio::{net::tcp::OwnedWriteHalf, sync::Mutex};
 use crate::{
     client::ClientConnection,
     message_protocol::{self},
-    types::transaction::PublicKeyString,
+    types::transaction::{PublicKeyString, TransferTransaction, UnsignedTransaction},
 };
 
 pub struct ClientAccount {
@@ -43,7 +43,7 @@ fn handle_help() {
         "Loads an account from a secret key pair"
     );
     println!("{}   {}", "  drip".blue(), "Request balance from faucet");
-    println!("{}", "  transfer <from> <to> <amount>".blue());
+    println!("{}", "  transfer <to> <amount>".blue());
     println!("{}", "  quit, q".blue());
 }
 
@@ -82,20 +82,55 @@ fn handle_load(trimmed: &str) -> ClientAccount {
     client_account
 }
 
-fn handle_transfer(trimmed: &str, client: &Option<ClientAccount>) {
-    let Some(_client) = client else {
+async fn handle_transfer(
+    trimmed: &str,
+    client: &mut Option<ClientAccount>,
+    client_connection: &ClientConnection,
+) -> std::io::Result<()> {
+    let Some(client) = client else {
         println!("Please create or load an account before transferring.");
-        return;
+        return Ok(());
     };
-    println!("This part is still a todo!");
-    return;
 
     let parts: Vec<&str> = trimmed["transfer ".len()..].split_whitespace().collect();
-    if parts.len() == 3 {
-        println!("{:?}", parts);
-    } else {
-        println!("Usage: transfer <from> <to> <amount>");
+    if parts.len() != 2 {
+        println!("Usage: transfer <to> <amount>");
     }
+
+    // Ensure that pk is valid hex
+    let to_pk_bytes = <[u8; 32]>::from_hex(parts[0]).expect("Invalid hex");
+    let to_pk = VerifyingKey::from_bytes(&to_pk_bytes).expect("Invalid public key bytes");
+    let to_pk = PublicKeyString::from_public_key(&to_pk);
+
+    if to_pk == client.pk_str {
+        println!("Can't transfer to self");
+        return Ok(());
+    }
+    let amount = parts[1].parse::<u128>().expect("To be non negative number");
+
+    let account_info = message_protocol::send_account_query(
+        client.pk_str.clone(),
+        client_connection.reader.clone(),
+        client_connection.writer.clone(),
+    )
+    .await?;
+
+    if amount > account_info.balance {
+        println!("Insufficient balance: {:?}", account_info.balance);
+        return Ok(());
+    }
+
+    let txn = UnsignedTransaction::Transfer(TransferTransaction {
+        from: client.pk_str.clone(),
+        to: to_pk,
+        amount,
+        nonce: account_info.nonce + 1,
+    });
+
+    let tx = txn.sign(&mut client.sk);
+
+    message_protocol::send_transaction(client_connection.writer.clone(), tx).await?;
+    return Ok(());
 }
 
 async fn handle_query(
@@ -147,7 +182,9 @@ pub async fn run_console(addr: &str) -> std::io::Result<()> {
                 handle_drip(&client_account, connection.writer.clone()).await?;
             }
             "query" => handle_query(&client_account, &connection).await?,
-            _ if trimmed.starts_with("transfer ") => handle_transfer(trimmed, &client_account),
+            _ if trimmed.starts_with("transfer ") => {
+                handle_transfer(trimmed, &mut client_account, &connection).await?
+            }
             "quit" | "q" => return Ok(()),
             _ => println!("Unknown command. Type `help` for options."),
         }
