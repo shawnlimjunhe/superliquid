@@ -480,9 +480,30 @@ impl HotStuffReplica {
         }
 
         if msg.partial_sig.is_some() {
-            // we can optimistically fast forward here - TODO
-            // vote message from leader for next view
-            return None;
+            // Optimistic view advancement: this node is the *next* leader,
+
+            if self.node_id != self.pacemaker.get_leader_for_view(curr_view + 1) {
+                return None;
+            }
+
+            if !self.voted_for_curr_view {
+                // Node must vote before attempting to lead the next view, else it's own vote would be missing from the quorum
+                return None;
+            }
+
+            if !utils::has_quorum_votes_for_view(
+                self.messages.get_messages_for_view(curr_view + 1),
+                curr_view + 1,
+                self.quorum_threshold(),
+            ) {
+                return None;
+            }
+
+            // Advance view early without waiting for pacemaker timeout
+
+            self.pacemaker.advance_view();
+
+            return Some(self.create_new_view());
         }
 
         // b*
