@@ -18,7 +18,7 @@ use crate::{
     state::state::{AccountInfo, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction},
+        transaction::{self, PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -257,10 +257,11 @@ impl HotStuffReplica {
     }
 
     /// Selects a transaction from the mempool and
-    fn select_transactions(&mut self) -> SignedTransaction {
+    fn select_transactions(&mut self) -> Vec<SignedTransaction> {
+        // return 1 transaction for now
         while self.mempool.len() > 0 {
             let Some(txn) = self.mempool.pop_next() else {
-                return SignedTransaction::create_empty_signed_transaction(&mut self.signing_key);
+                return vec![];
             };
             let txn_hash = txn.hash();
             if self.pending_transactions.contains_key(&txn_hash)
@@ -270,9 +271,9 @@ impl HotStuffReplica {
             }
 
             self.pending_transactions.insert(txn_hash, txn.clone());
-            return txn;
+            return vec![txn];
         }
-        return SignedTransaction::create_empty_signed_transaction(&mut self.signing_key);
+        return vec![];
     }
 
     fn leader_create_message(&mut self, new_block: Block) -> HotStuffMessage {
@@ -321,35 +322,39 @@ impl HotStuffReplica {
     fn add_block_transactions_to_pending(&mut self, block: &Block) {
         let transactions = block.transactions();
 
-        match transactions.tx {
-            UnsignedTransaction::Transfer(_) => {
-                self.pending_transactions
-                    .insert(transactions.hash, transactions.clone());
+        for transaction in transactions.iter() {
+            match transaction.tx {
+                UnsignedTransaction::Transfer(_) => {
+                    self.pending_transactions
+                        .insert(transaction.hash, transaction.clone());
+                }
             }
-            UnsignedTransaction::Empty => (),
-        };
+        }
     }
 
     fn add_block_transactions_to_committed(&mut self, block: &Block) {
         let transactions = block.transactions();
 
-        match transactions.tx {
-            UnsignedTransaction::Transfer(_) => self
-                .committed_transactions
-                .insert(transactions.hash, transactions.clone()),
-            UnsignedTransaction::Empty => None,
-        };
+        for transaction in transactions.iter() {
+            match transaction.tx {
+                UnsignedTransaction::Transfer(_) => {
+                    self.committed_transactions
+                        .insert(transaction.hash, transaction.clone());
+                }
+            }
+        }
     }
 
     fn remove_block_transactions_from_pending(&mut self, block: &Block) {
         let transactions = block.transactions();
 
-        match transactions.tx {
-            UnsignedTransaction::Transfer(_) => {
-                self.pending_transactions.remove_entry(&transactions.hash)
-            }
-            UnsignedTransaction::Empty => None,
-        };
+        for transaction in transactions.iter() {
+            match transaction.tx {
+                UnsignedTransaction::Transfer(_) => {
+                    self.pending_transactions.remove_entry(&transaction.hash)
+                }
+            };
+        }
     }
 
     pub fn leader_handle_message(&mut self) -> Option<HotStuffMessage> {
@@ -769,7 +774,6 @@ impl HotStuffReplica {
                 let account_info = self.ledger_state.retrieve_by_pk(&transfer_transaction.from);
                 self.mempool.insert(txn, account_info.nonce + 1);
             }
-            UnsignedTransaction::Empty => println!("Unexpected empty transaction"),
         }
     }
 

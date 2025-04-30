@@ -153,9 +153,6 @@ mod tests {
                         crate::types::transaction::UnsignedTransaction::Transfer(
                             transfer_transaction,
                         ) => assert_eq!(transfer_transaction.amount, 42),
-                        crate::types::transaction::UnsignedTransaction::Empty => {
-                            panic!("Expected Transfer transaction")
-                        }
                     }
                 }
                 _ => panic!("Expected Transaction"),
@@ -216,9 +213,6 @@ mod tests {
         match &first_tx.tx {
             crate::types::transaction::UnsignedTransaction::Transfer(transfer_transaction) => {
                 assert_eq!(transfer_transaction.from, get_alice_pk_str());
-            }
-            crate::types::transaction::UnsignedTransaction::Empty => {
-                panic!("Expected Transfer transaction")
             }
         }
 

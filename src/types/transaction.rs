@@ -11,7 +11,6 @@ use crate::{hotstuff::utils, state::state::Nonce};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UnsignedTransaction {
     Transfer(TransferTransaction),
-    Empty,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -69,13 +68,7 @@ impl SignedTransaction {
                     .expect("Conversion from string to signature failed");
                 public_key.verify_strict(&tx_hash, &signature).is_ok()
             }
-            UnsignedTransaction::Empty => true,
         }
-    }
-
-    pub fn create_empty_signed_transaction(signing_key: &mut SigningKey) -> Self {
-        let empty_transaction = UnsignedTransaction::Empty;
-        empty_transaction.sign(signing_key)
     }
 }
 
@@ -226,18 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_and_verify_empty_transaction() {
-        let (mut sk, _vk) = generate_keypair();
-        let unsigned = UnsignedTransaction::Empty;
-
-        let signed = unsigned.sign(&mut sk);
-        assert!(
-            signed.verify_sender(),
-            "Empty transaction should always verify"
-        );
-    }
-
-    #[test]
     fn test_signed_transaction_deref() {
         let (mut sk, vk) = generate_keypair();
         let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
@@ -377,17 +358,6 @@ mod tests {
             assert_ne!(
                 signed1.signature, signed2.signature,
                 "Signatures should differ for different keys"
-            );
-        }
-
-        #[test]
-        fn test_empty_transaction_verifies_regardless() {
-            let (mut sk, _vk) = generate_keypair();
-            let empty_signed = UnsignedTransaction::Empty.sign(&mut sk);
-
-            assert!(
-                empty_signed.verify_sender(),
-                "Empty txs should always verify regardless of signer"
             );
         }
 

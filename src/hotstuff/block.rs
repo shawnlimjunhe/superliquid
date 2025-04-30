@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, vec};
 
-use crate::types::transaction::{Sha256Hash, SignedTransaction};
+use crate::types::transaction::{self, Sha256Hash, SignedTransaction};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,13 +15,13 @@ pub type BlockHash = Sha256Hash;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Block {
     Genesis {
-        transactions: SignedTransaction,
+        transactions: Vec<SignedTransaction>,
         view_number: ViewNumber,
         justify: QuorumCertificate,
     },
     Normal {
         parent_id: BlockHash,
-        transactions: SignedTransaction,
+        transactions: Vec<SignedTransaction>,
         view_number: ViewNumber,
         justify: QuorumCertificate,
         // proposer: PublicKeyString,
@@ -39,13 +39,13 @@ struct HashableBlock {
 impl Block {
     pub fn create_leaf(
         parent: &Block,
-        transactions: SignedTransaction,
+        transactions: Vec<SignedTransaction>,
         view_number: ViewNumber,
         justify: QuorumCertificate,
     ) -> Self {
         return Self::Normal {
             parent_id: parent.hash(),
-            transactions,
+            transactions: transactions,
             view_number,
             justify,
         };
@@ -80,6 +80,14 @@ impl Block {
         false
     }
 
+    pub fn hash_block_transactions(transactions: &Vec<SignedTransaction>) -> Sha256Hash {
+        // Will implement merkle tree later
+        if transactions.len() > 0 {
+            return transactions[0].hash();
+        }
+        Sha256Hash::default()
+    }
+
     pub fn hash(&self) -> BlockHash {
         match self {
             Self::Genesis { .. } => Sha256::digest(b"GENESIS").into(),
@@ -91,7 +99,7 @@ impl Block {
             } => {
                 let hashable = HashableBlock {
                     parent_id: *parent_id,
-                    txns_hash: transactions.hash(),
+                    txns_hash: Self::hash_block_transactions(transactions),
                     view_number: *view_number,
                 };
 
@@ -101,11 +109,9 @@ impl Block {
         }
     }
 
-    pub fn transactions(&self) -> &SignedTransaction {
-        match self {
-            Block::Genesis { transactions, .. } => transactions,
-            Block::Normal { transactions, .. } => transactions,
-        }
+    pub fn transactions(&self) -> &Vec<SignedTransaction> {
+        let (Block::Genesis { transactions, .. } | Block::Normal { transactions, .. }) = self;
+        transactions
     }
 
     pub fn create_genesis_block(signing_key: &mut SigningKey) -> (Block, QuorumCertificate) {
@@ -114,7 +120,7 @@ impl Block {
         let genesis = Block::Genesis {
             view_number: 0,
             justify: qc.clone(),
-            transactions: SignedTransaction::create_empty_signed_transaction(signing_key),
+            transactions: vec![],
         };
         return (genesis, qc);
     }

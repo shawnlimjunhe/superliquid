@@ -77,7 +77,6 @@ impl PriorityMempool {
 
                 account.insert(transfer_tx.nonce, txn);
             }
-            UnsignedTransaction::Empty => {}
         }
     }
 
@@ -101,15 +100,18 @@ impl PriorityMempool {
         sum
     }
 
-    pub fn update_after_execution(&mut self, accounts_nonces: Vec<(PublicKeyString, Nonce)>) {
-        for (pk, expected_nonce) in accounts_nonces.iter() {
+    pub fn update_after_execution(
+        &mut self,
+        accounts_nonces: Vec<Option<(PublicKeyString, Nonce)>>,
+    ) {
+        for (pk, expected_nonce) in accounts_nonces.into_iter().flatten() {
             let Some(account) = self.account_queues.get_mut(&pk) else {
                 continue;
             };
 
-            if account.contains_key(expected_nonce) {
+            if account.contains_key(&expected_nonce) {
                 self.priority_buckets[Priority::Other as usize]
-                    .push_back((pk.clone(), *expected_nonce));
+                    .push_back((pk.clone(), expected_nonce));
             }
         }
     }
