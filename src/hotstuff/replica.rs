@@ -472,20 +472,9 @@ impl HotStuffReplica {
 
         let curr_view = self.pacemaker.curr_view;
 
-        if msg.sender != self.pacemaker.get_leader_for_view(self.pacemaker.curr_view) {
-            // could be a pending vote for the current proposal
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "msg sender: {:?} is not the leader. Leader is: {:?}",
-                msg.sender,
-                self.pacemaker.get_leader_for_view(curr_view)
-            );
-            return None;
-        }
-
         if msg.partial_sig.is_some() {
-            // Optimistic view advancement: this node is the *next* leader,
+            // Messages that fall in this block are votes sent to the *next* leader
+            // We can try to optimistically advance the view, otherwise we ignore the messages
 
             if self.node_id != self.pacemaker.get_leader_for_view(curr_view + 1) {
                 return None;
@@ -497,20 +486,39 @@ impl HotStuffReplica {
             }
 
             if !utils::has_quorum_votes_for_view(
-                self.messages.get_messages_for_view(curr_view + 1),
-                curr_view + 1,
+                self.messages.get_messages_for_view(curr_view),
+                curr_view,
                 self.quorum_threshold(),
             ) {
                 return None;
             }
 
+            replica_debug!(
+                self.node_id,
+                self.pacemaker.curr_view,
+                "Optimistically advancing to new view",
+            );
             // Advance view early without waiting for pacemaker timeout
-
             self.pacemaker.advance_view();
 
             return Some(self.create_new_view());
         }
 
+        if self.voted_for_curr_view {
+            return None;
+        }
+
+        if msg.sender != self.pacemaker.get_leader_for_view(self.pacemaker.curr_view) {
+            // Ignore messages not from leader of the current view
+            replica_debug!(
+                self.node_id,
+                self.pacemaker.curr_view,
+                "msg sender: {:?} is not the leader. Leader is: {:?}",
+                msg.sender,
+                self.pacemaker.get_leader_for_view(curr_view)
+            );
+            return None;
+        }
         // b*
         let Some(b_star) = msg.node.clone() else {
             replica_debug!(self.node_id, self.pacemaker.curr_view, "No node in message");
@@ -652,15 +660,6 @@ impl HotStuffReplica {
             );
         }
 
-        // replica_debug!(
-        //     self.node_id,
-        //     self.pacemaker.curr_view,
-        //     "Recieved message: {:?} with view: {:?} from node-id: {:?}",
-        //     msg.node,
-        //     msg.view_number,
-        //     msg.sender,
-        // );
-
         self.messages.push(msg.clone());
 
         let leader = self.pacemaker.current_leader();
@@ -710,10 +709,6 @@ impl HotStuffReplica {
             return Ok(());
         }
 
-        if self.voted_for_curr_view {
-            return Ok(());
-        }
-
         // Handle as replica only
         let outbound_msg_opt = self.replica_handle_message(msg);
 
@@ -723,6 +718,8 @@ impl HotStuffReplica {
 
         let next_leader = self.pacemaker.get_leader_for_view(curr_view + 1);
 
+        self.voted_for_curr_view = true;
+
         if self.node_id == next_leader {
             replica_debug!(
                 self.node_id,
@@ -730,8 +727,6 @@ impl HotStuffReplica {
                 "Sending to self as node is next leader"
             );
             let _ = self.rep_node_channel.send_to_self(outbound_msg).await;
-
-            self.voted_for_curr_view = true;
 
             return Ok(());
         }
@@ -792,12 +787,8 @@ impl HotStuffReplica {
                 Some(msg) = to_replica_rx.recv() => {
                     match msg {
                         ReplicaInBound::HotStuff(msg) => self.handle_message(msg).await?,
-                        ReplicaInBound::Transaction(tx) => {
-                            self.handle_transaction(tx);
-                        },
-                        ReplicaInBound::Query(query) => {
-                            self.handle_query(query);
-                        }
+                        ReplicaInBound::Transaction(tx) => self.handle_transaction(tx),
+                        ReplicaInBound::Query(query) => self.handle_query(query),
                     }
                 },
 

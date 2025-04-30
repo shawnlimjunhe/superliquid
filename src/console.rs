@@ -16,7 +16,7 @@ use crate::{
 
 pub struct ClientAccount {
     sk: SigningKey,
-    pub(crate) pk: VerifyingKey,
+    pub(crate) _pk: VerifyingKey,
     pub(crate) pk_str: PublicKeyString,
 }
 
@@ -26,7 +26,11 @@ impl ClientAccount {
         let pk_str = PublicKeyString::from_public_key(&pk);
         let sk_hex: String = sk.to_bytes().iter().map(|b| format!("{:02x}", b)).collect();
         println!("{:?}", sk_hex);
-        Self { sk, pk, pk_str }
+        Self {
+            sk,
+            _pk: pk,
+            pk_str,
+        }
     }
 }
 
