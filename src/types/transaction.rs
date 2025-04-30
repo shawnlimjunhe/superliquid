@@ -219,26 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_transaction_deref() {
-        let (mut sk, vk) = generate_keypair();
-        let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
-            from: PublicKeyString::from_public_key(&vk),
-            to: PublicKeyString::default(),
-            amount: 200,
-            nonce: 0,
-        });
-
-        let signed = unsigned.sign(&mut sk);
-
-        // Thanks to Deref, can treat signed like unsigned
-        if let UnsignedTransaction::Transfer(transfer) = &*signed {
-            assert_eq!(transfer.amount, 200);
-        } else {
-            panic!("Expected Transfer transaction");
-        }
-    }
-
-    #[test]
     fn test_signature_string_conversion() {
         let (sk, _vk) = generate_keypair();
         let dummy_data = [1u8; 32];

@@ -18,7 +18,7 @@ use crate::{
     state::state::{AccountInfo, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{self, PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction},
+        transaction::{PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -98,9 +98,9 @@ impl HotStuffReplica {
         replica_tx: mpsc::Sender<ReplicaInBound>,
         node_tx: mpsc::Sender<ReplicaOutbound>,
     ) -> Self {
-        let mut signing_key = config::retrieve_signing_key_checked(node_id);
+        let signing_key = config::retrieve_signing_key_checked(node_id);
 
-        let (genesis_block, genesis_qc) = Block::create_genesis_block(&mut signing_key);
+        let (genesis_block, genesis_qc) = Block::create_genesis_block();
         let mut blockstore: HashMap<BlockHash, Block> = HashMap::new();
         blockstore.insert(genesis_block.hash(), genesis_block.clone());
 

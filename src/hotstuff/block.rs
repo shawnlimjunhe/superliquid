@@ -1,7 +1,6 @@
 use std::{collections::HashMap, vec};
 
-use crate::types::transaction::{self, Sha256Hash, SignedTransaction};
-use ed25519_dalek::SigningKey;
+use crate::types::transaction::{Sha256Hash, SignedTransaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -114,7 +113,7 @@ impl Block {
         transactions
     }
 
-    pub fn create_genesis_block(signing_key: &mut SigningKey) -> (Block, QuorumCertificate) {
+    pub fn create_genesis_block() -> (Block, QuorumCertificate) {
         let qc = crypto::QuorumCertificate::create_genesis_qc();
 
         let genesis = Block::Genesis {
