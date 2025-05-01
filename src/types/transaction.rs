@@ -135,9 +135,18 @@ impl PublicKeyString {
         Ok(PublicKeyString(s))
     }
 
+    pub fn from_bytes(bytes: Sha256Hash) -> Self {
+        let pk_string = hex_encode(bytes);
+        PublicKeyString(pk_string)
+    }
+
     pub fn as_public_key(&self) -> VerifyingKey {
         let bytes = <[u8; 32]>::from_hex(&self.0).unwrap();
         VerifyingKey::from_bytes(&bytes).expect("Expect to be public key")
+    }
+
+    pub fn to_bytes(&self) -> Sha256Hash {
+        <[u8; 32]>::from_hex(&self.0).unwrap()
     }
 
     pub fn as_str(&self) -> &str {
@@ -230,64 +239,118 @@ mod tests {
         assert_eq!(sig_string, reconstructed.as_str());
     }
 
-    #[test]
-    fn test_public_key_string_roundtrip() {
-        let (_, vk) = generate_keypair();
-        let pk_str = PublicKeyString::from_public_key(&vk);
-        let reconstructed_vk = pk_str.as_public_key();
+    mod public_key_string_tests {
+        use crate::types::transaction::{
+            PublicKeyString, SignatureString, TransferTransaction, UnsignedTransaction,
+            tests::generate_keypair,
+        };
 
-        assert_eq!(vk.to_bytes(), reconstructed_vk.to_bytes());
-    }
+        #[test]
+        fn test_public_key_string_roundtrip() {
+            let (_, vk) = generate_keypair();
+            let pk_str = PublicKeyString::from_public_key(&vk);
+            let reconstructed_vk = pk_str.as_public_key();
 
-    #[test]
-    #[should_panic(expected = "Invalid hex")]
-    fn test_signature_string_invalid_hex_panics() {
-        let invalid_hex = "ZZZ".repeat(22); // clearly invalid
-        let _ = SignatureString::new(invalid_hex).unwrap();
-    }
+            assert_eq!(vk.to_bytes(), reconstructed_vk.to_bytes());
+        }
 
-    #[test]
-    #[should_panic(expected = "Invalid hex")]
-    fn test_public_key_string_invalid_hex_panics() {
-        let invalid_hex = "GGG".repeat(10);
-        let _ = PublicKeyString::from_string(invalid_hex).unwrap();
-    }
+        #[test]
+        fn test_from_bytes_and_to_bytes_roundtrip() {
+            // Generate random public key bytes
 
-    #[test]
-    fn test_unsigned_transaction_equality() {
-        let (_, vk) = generate_keypair();
-        let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
-            from: PublicKeyString::from_public_key(&vk),
-            to: PublicKeyString::default(),
-            amount: 123,
-            nonce: 0,
-        });
-        let tx2 = tx1.clone();
+            let (_, vk) = generate_keypair();
+            let bytes: [u8; 32] = vk.to_bytes();
 
-        assert_eq!(tx1, tx2, "Transactions should be equal based on hash");
-    }
+            let pks = PublicKeyString::from_bytes(bytes);
+            let roundtrip = pks.to_bytes();
 
-    #[test]
-    fn test_unsigned_transaction_inequality() {
-        let (_, vk) = generate_keypair();
-        let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
-            from: PublicKeyString::from_public_key(&vk),
-            to: PublicKeyString::default(),
-            amount: 123,
-            nonce: 0,
-        });
+            assert_eq!(
+                roundtrip, bytes,
+                "to_bytes should return original public key bytes"
+            );
+        }
 
-        let tx2 = UnsignedTransaction::Transfer(TransferTransaction {
-            from: PublicKeyString::from_public_key(&vk),
-            to: PublicKeyString::default(),
-            amount: 456,
-            nonce: 0,
-        });
+        #[test]
+        #[should_panic(expected = "Invalid hex")]
+        fn test_signature_string_invalid_hex_panics() {
+            let invalid_hex = "ZZZ".repeat(22); // clearly invalid
+            let _ = SignatureString::new(invalid_hex).unwrap();
+        }
 
-        assert_ne!(
-            tx1, tx2,
-            "Transactions with different amounts should not be equal"
-        );
+        #[test]
+        fn test_to_bytes_invalid_hex_panics() {
+            let pks = PublicKeyString(
+                "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".into(),
+            );
+            // unwrap should panic due to invalid hex
+            let result = std::panic::catch_unwind(|| {
+                let _ = pks.to_bytes();
+            });
+            assert!(result.is_err(), "Expected to panic on invalid hex");
+        }
+
+        #[test]
+        #[should_panic(expected = "Invalid hex")]
+        fn test_public_key_string_invalid_hex_panics() {
+            let invalid_hex = "GGG".repeat(10);
+            let _ = PublicKeyString::from_string(invalid_hex).unwrap();
+        }
+
+        #[test]
+        fn test_from_bytes_creates_valid_string() {
+            let (_, vk) = generate_keypair();
+            let bytes = vk.to_bytes();
+
+            let pks = PublicKeyString::from_bytes(bytes);
+            let s = pks.as_str();
+
+            assert_eq!(
+                s.len(),
+                64,
+                "Hex-encoded string should be 64 characters for 32 bytes"
+            );
+            assert!(
+                s.chars().all(|c| c.is_ascii_hexdigit()),
+                "String should be valid hex"
+            );
+        }
+
+        #[test]
+        fn test_unsigned_transaction_equality() {
+            let (_, vk) = generate_keypair();
+            let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
+                from: PublicKeyString::from_public_key(&vk),
+                to: PublicKeyString::default(),
+                amount: 123,
+                nonce: 0,
+            });
+            let tx2 = tx1.clone();
+
+            assert_eq!(tx1, tx2, "Transactions should be equal based on hash");
+        }
+
+        #[test]
+        fn test_unsigned_transaction_inequality() {
+            let (_, vk) = generate_keypair();
+            let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
+                from: PublicKeyString::from_public_key(&vk),
+                to: PublicKeyString::default(),
+                amount: 123,
+                nonce: 0,
+            });
+
+            let tx2 = UnsignedTransaction::Transfer(TransferTransaction {
+                from: PublicKeyString::from_public_key(&vk),
+                to: PublicKeyString::default(),
+                amount: 456,
+                nonce: 0,
+            });
+
+            assert_ne!(
+                tx1, tx2,
+                "Transactions with different amounts should not be equal"
+            );
+        }
     }
 
     mod signed_transaction_tests {
