@@ -59,12 +59,14 @@ impl QuorumCertificate {
         view_number: ViewNumber,
         block_hash: BlockHash,
         message_hash: [u8; 32],
-        partial_sigs: Vec<PartialSig>,
+        partial_sigs: Vec<&PartialSig>,
     ) -> Self {
         assert!(
             !partial_sigs.is_empty(),
             "from_signatures requires at least one partial signature"
         );
+        let partial_sigs: Vec<PartialSig> = partial_sigs.into_iter().map(|x| x.clone()).collect();
+
         QuorumCertificate {
             view_number,
             block_hash,

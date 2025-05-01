@@ -68,7 +68,7 @@ impl LedgerState {
     // retrieves account info by public key, creates one if one doesn't exist
     pub(crate) fn retrieve_by_pk_mut(&mut self, public_key: &PublicKeyHash) -> &mut AccountInfo {
         self.accounts
-            .entry(public_key.clone())
+            .entry(*public_key)
             .or_insert_with(AccountInfo::new)
     }
 

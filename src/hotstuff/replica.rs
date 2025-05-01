@@ -18,9 +18,7 @@ use crate::{
     state::state::{AccountInfo, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{
-            PublicKeyHash, PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction,
-        },
+        transaction::{PublicKeyHash, Sha256Hash, SignedTransaction, UnsignedTransaction},
     },
 };
 
@@ -170,7 +168,7 @@ impl HotStuffReplica {
         option_justify: Option<QuorumCertificate>,
     ) -> HotStuffMessage {
         let mut message = HotStuffMessage::new(
-            Some(node.clone()),
+            Some(node.clone()), // need to clone as we are serialising our message
             option_justify,
             self.pacemaker.curr_view,
             self.node_id,
@@ -196,11 +194,11 @@ impl HotStuffReplica {
 
         // 2) Tally signatures by (block_hash → Vec<PartialSig>),
         //    verifying and deduplicating by signer.
-        let mut seen: HashSet<VerifyingKey> = HashSet::new();
-        let mut tally: HashMap<(BlockHash, Sha256Hash), Vec<PartialSig>> = HashMap::new();
+        let mut seen: HashSet<PublicKeyHash> = HashSet::new();
+        let mut tally: HashMap<(BlockHash, Sha256Hash), Vec<&PartialSig>> = HashMap::new();
 
         for m in msgs {
-            if let Some(sig) = m.partial_sig.clone() {
+            if let Some(sig) = &m.partial_sig {
                 // a) signature must come from a known, unseen validator
                 if !self.validator_set.contains(&sig.signer_id) {
                     continue;
@@ -216,7 +214,7 @@ impl HotStuffReplica {
                     continue;
                 }
 
-                if !seen.insert(sig.signer_id.clone()) {
+                if !seen.insert(*sig.signer_id.as_bytes()) {
                     continue;
                 }
 
@@ -250,7 +248,7 @@ impl HotStuffReplica {
     }
 
     pub fn safe_node(&self, block: &Block, qc: &QuorumCertificate) -> bool {
-        let locked_qc = &self.locked_qc.clone();
+        let locked_qc = &self.locked_qc;
         let locked_block_hash = locked_qc.block_hash;
         let extends = block.extends_from(locked_block_hash, &self.blockstore);
         let newer_qc = qc.view_number > locked_qc.view_number;
@@ -310,9 +308,9 @@ impl HotStuffReplica {
         };
 
         // Clone the child block from the store so we get an owned `Block`
-        let child_block = self.blockstore.get(&justify.block_hash).cloned();
+        let child_block = self.blockstore.get(&justify.block_hash);
 
-        (child_block, Some(justify.clone()))
+        (child_block.cloned(), Some(justify.clone()))
     }
 
     fn is_parent(&self, block_child: &Block, block_parent: &Block) -> bool {
