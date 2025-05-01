@@ -31,7 +31,7 @@ pub enum Block {
 #[derive(Serialize, Deserialize)]
 struct HashableBlock {
     parent_id: BlockHash,
-    txns_hash: Sha256Hash,
+    merkle_root: Sha256Hash,
     view_number: ViewNumber,
 }
 
@@ -79,14 +79,46 @@ impl Block {
         false
     }
 
-    pub fn hash_block_transactions(transactions: &Vec<SignedTransaction>) -> Sha256Hash {
-        // Will implement merkle tree later
-        if transactions.len() > 0 {
-            return transactions[0].hash();
+    pub fn generate_merkle_root(mut hashes: Vec<[u8; 32]>) -> Sha256Hash {
+        if hashes.is_empty() {
+            return [0u8; 32];
         }
-        Sha256Hash::default()
+
+        if hashes.len() == 1 {
+            return hashes[0];
+        }
+
+        if hashes.len() % 2 == 1 {
+            hashes.push(*hashes.last().unwrap());
+        }
+
+        let mut len = hashes.len();
+        while len > 1 {
+            for i in (0..len).step_by(2) {
+                let mut buf = [0u8; 64];
+                buf[..32].copy_from_slice(&hashes[i]);
+                buf[32..].copy_from_slice(&hashes[i + 1]);
+                hashes[i / 2] = Sha256::digest(&buf).into();
+            }
+            len = (len + 1) / 2;
+
+            if len % 2 == 1 && len > 1 {
+                hashes[len] = hashes[len - 1]; // safe only if hashes has enough capacity
+                len += 1;
+            }
+        }
+
+        hashes[0]
     }
 
+    pub fn hash_transactions(transactions: &Vec<SignedTransaction>) -> Sha256Hash {
+        if transactions.len() == 0 {
+            return Sha256Hash::default();
+        }
+
+        let hashes = transactions.iter().map(|tx| tx.hash()).collect::<Vec<_>>();
+        Self::generate_merkle_root(hashes)
+    }
     pub fn hash(&self) -> BlockHash {
         match self {
             Self::Genesis { .. } => Sha256::digest(b"GENESIS").into(),
@@ -98,7 +130,7 @@ impl Block {
             } => {
                 let hashable = HashableBlock {
                     parent_id: *parent_id,
-                    txns_hash: Self::hash_block_transactions(transactions),
+                    merkle_root: Self::hash_transactions(transactions),
                     view_number: *view_number,
                 };
 
@@ -122,5 +154,96 @@ impl Block {
             transactions: vec![],
         };
         return (genesis, qc);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn hash(data: &[u8]) -> [u8; 32] {
+        Sha256::digest(data).into()
+    }
+
+    #[test]
+    fn test_empty_hash_list() {
+        let hashes = vec![];
+        let root = Block::generate_merkle_root(hashes);
+        assert_eq!(root, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_single_hash() {
+        let leaf = hash(b"leaf");
+        let root = Block::generate_merkle_root(vec![leaf]);
+        assert_eq!(root, leaf);
+    }
+
+    #[test]
+    fn test_even_number_of_hashes() {
+        let h1 = hash(b"a");
+        let h2 = hash(b"b");
+        let h3 = hash(b"c");
+        let h4 = hash(b"d");
+
+        let root = Block::generate_merkle_root(vec![h1, h2, h3, h4]);
+
+        // Manually compute
+        let l1: [u8; 32] = Sha256::digest(&[h1, h2].concat()).into();
+        let l2: [u8; 32] = Sha256::digest(&[h3, h4].concat()).into();
+        let expected_root: [u8; 32] = Sha256::digest(&[l1, l2].concat()).into();
+
+        assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn test_odd_number_of_hashes() {
+        let h1 = hash(b"x");
+        let h2 = hash(b"y");
+        let h3 = hash(b"z");
+
+        let root = Block::generate_merkle_root(vec![h1, h2, h3]);
+
+        // After duplication, tree will be built on [h1, h2, h3, h3]
+        let l1: [u8; 32] = Sha256::digest(&[h1, h2].concat()).into();
+        let l2: [u8; 32] = Sha256::digest(&[h3, h3].concat()).into();
+        let expected_root: [u8; 32] = Sha256::digest(&[l1, l2].concat()).into();
+
+        assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn test_10_hashes() {
+        let h1 = hash(b"a");
+        let h2 = hash(b"b");
+        let h3 = hash(b"c");
+        let h4 = hash(b"d");
+        let h5 = hash(b"e");
+        let h6 = hash(b"f");
+        let h7 = hash(b"g");
+
+        let root = Block::generate_merkle_root(vec![h1, h2, h3, h4, h5, h6, h7]);
+
+        let l1: [u8; 32] = Sha256::digest(&[h1, h2].concat()).into();
+        let l2: [u8; 32] = Sha256::digest(&[h3, h4].concat()).into();
+        let l3: [u8; 32] = Sha256::digest(&[h5, h6].concat()).into();
+        let l4: [u8; 32] = Sha256::digest(&[h7, h7].concat()).into();
+        let l5: [u8; 32] = Sha256::digest(&[l1, l2].concat()).into();
+        let l6: [u8; 32] = Sha256::digest(&[l3, l4].concat()).into();
+        let expected_root: [u8; 32] = Sha256::digest(&[l5, l6].concat()).into();
+
+        assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn test_merkle_root_is_not_commutative() {
+        let h1 = hash(b"1");
+        let h2 = hash(b"2");
+
+        let root1 = Block::generate_merkle_root(vec![h1, h2]);
+        let root2 = Block::generate_merkle_root(vec![h2, h1]);
+
+        assert_ne!(root1, root2);
     }
 }
