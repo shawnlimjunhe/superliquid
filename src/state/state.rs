@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::{
     config,
     hotstuff::block::Block,
-    types::transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction},
+    types::transaction::{PublicKeyHash, PublicKeyString, SignedTransaction, UnsignedTransaction},
 };
 
 pub type Balance = u128;
@@ -49,27 +49,24 @@ pub enum ExecError {
 }
 
 pub struct LedgerState {
-    pub accounts: HashMap<PublicKeyString, AccountInfo>,
+    pub accounts: HashMap<PublicKeyHash, AccountInfo>,
 }
 
 impl LedgerState {
     pub(crate) fn new() -> Self {
         let (pk, _) = config::retrieve_faucet_keys();
-        let mut accounts: HashMap<PublicKeyString, AccountInfo> = HashMap::new();
-        accounts.insert(
-            PublicKeyString::from_public_key(&pk),
-            AccountInfo::create_faucet(),
-        );
+        let mut accounts: HashMap<PublicKeyHash, AccountInfo> = HashMap::new();
+        accounts.insert(pk.to_bytes(), AccountInfo::create_faucet());
 
         LedgerState { accounts }
     }
 
-    pub(crate) fn retrieve_by_pk(&self, public_key: &PublicKeyString) -> AccountInfo {
+    pub(crate) fn retrieve_by_pk(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.accounts.get(public_key).cloned().unwrap_or_default()
     }
 
     // retrieves account info by public key, creates one if one doesn't exist
-    pub(crate) fn retrieve_by_pk_mut(&mut self, public_key: &PublicKeyString) -> &mut AccountInfo {
+    pub(crate) fn retrieve_by_pk_mut(&mut self, public_key: &PublicKeyHash) -> &mut AccountInfo {
         self.accounts
             .entry(public_key.clone())
             .or_insert_with(AccountInfo::new)
@@ -78,8 +75,8 @@ impl LedgerState {
     pub(crate) fn apply(
         &mut self,
         transactions: &Vec<SignedTransaction>,
-    ) -> Result<Vec<Option<(PublicKeyString, Nonce)>>, ExecError> {
-        let mut account_nonces: Vec<Option<(PublicKeyString, Nonce)>> = vec![];
+    ) -> Result<Vec<Option<(PublicKeyHash, Nonce)>>, ExecError> {
+        let mut account_nonces: Vec<Option<(PublicKeyHash, Nonce)>> = vec![];
 
         for transaction in transactions.iter() {
             match &transaction.tx {
@@ -88,7 +85,7 @@ impl LedgerState {
                     if from_info.balance < tx.amount {
                         println!("Insufficient Funds");
                         return Err(ExecError::InsufficientFunds {
-                            from: tx.from.clone(),
+                            from: PublicKeyString::from_bytes(tx.from),
                             have: from_info.balance,
                             need: tx.amount,
                         });
@@ -97,7 +94,7 @@ impl LedgerState {
                     if from_info.nonce + 1 != tx.nonce {
                         println!("Duplicate nonce");
                         return Err(ExecError::DuplicateNonce {
-                            from: tx.from.clone(),
+                            from: PublicKeyString::from_bytes(tx.from),
                             nonce: tx.nonce,
                         });
                     }
@@ -109,14 +106,14 @@ impl LedgerState {
                     let to_info = self.retrieve_by_pk_mut(&tx.to);
                     to_info.balance += tx.amount;
 
-                    account_nonces.push(Some((tx.from.clone(), new_nonce)));
+                    account_nonces.push(Some((tx.from, new_nonce)));
                 }
             }
         }
         return Ok(account_nonces);
     }
 
-    pub(crate) fn apply_block(&mut self, block: &Block) -> Vec<Option<(PublicKeyString, Nonce)>> {
+    pub(crate) fn apply_block(&mut self, block: &Block) -> Vec<Option<(PublicKeyHash, Nonce)>> {
         match self.apply(&block.transactions()) {
             Ok(v) => return v,
             Err(_) => return vec![],

@@ -38,8 +38,8 @@ pub mod test_helpers {
 
     pub fn make_alice_transaction() -> SignedTransaction {
         let unsigned_txn = UnsignedTransaction::Transfer(TransferTransaction {
-            from: get_alice_pk_str(),
-            to: get_bob_pk_str(),
+            from: get_alice_pk_str().to_bytes(),
+            to: get_bob_pk_str().to_bytes(),
             amount: 42,
             nonce: 0,
         });

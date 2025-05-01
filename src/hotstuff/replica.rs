@@ -18,7 +18,9 @@ use crate::{
     state::state::{AccountInfo, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
-        transaction::{PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction},
+        transaction::{
+            PublicKeyHash, PublicKeyString, Sha256Hash, SignedTransaction, UnsignedTransaction,
+        },
     },
 };
 
@@ -148,7 +150,7 @@ impl HotStuffReplica {
         self.signing_key.verifying_key()
     }
 
-    pub fn get_account_info(&self, public_key: &PublicKeyString) -> AccountInfo {
+    pub fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.ledger_state.retrieve_by_pk(public_key)
     }
 

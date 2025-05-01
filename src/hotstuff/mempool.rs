@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::{
     state::state::Nonce,
-    types::transaction::{PublicKeyString, SignedTransaction, UnsignedTransaction},
+    types::transaction::{PublicKeyHash, SignedTransaction, UnsignedTransaction},
 };
 
 /// Per-account transaction queue, ordered by nonce.
@@ -42,11 +42,11 @@ enum Priority {
 /// - Transactions are immediately removed from `account_queues` after execution.
 /// - Memory safety is guaranteed by strict immediate removal of executed transactions, preventing stale references.
 pub struct PriorityMempool {
-    account_queues: HashMap<PublicKeyString, AccountQueue>,
+    account_queues: HashMap<PublicKeyHash, AccountQueue>,
     /// VecDeque is chosen for fast push/pop from both ends.
     /// - Liquidations and cancels are processed first.
     /// - Transfers are processed after urgent actions are handled.
-    priority_buckets: [VecDeque<(PublicKeyString, Nonce)>; PRIORITY_LEVELS as usize],
+    priority_buckets: [VecDeque<(PublicKeyHash, Nonce)>; PRIORITY_LEVELS as usize],
 }
 
 impl PriorityMempool {
@@ -100,18 +100,14 @@ impl PriorityMempool {
         sum
     }
 
-    pub fn update_after_execution(
-        &mut self,
-        accounts_nonces: Vec<Option<(PublicKeyString, Nonce)>>,
-    ) {
+    pub fn update_after_execution(&mut self, accounts_nonces: Vec<Option<(PublicKeyHash, Nonce)>>) {
         for (pk, expected_nonce) in accounts_nonces.into_iter().flatten() {
             let Some(account) = self.account_queues.get_mut(&pk) else {
                 continue;
             };
 
             if account.contains_key(&expected_nonce) {
-                self.priority_buckets[Priority::Other as usize]
-                    .push_back((pk.clone(), expected_nonce));
+                self.priority_buckets[Priority::Other as usize].push_back((pk, expected_nonce));
             }
         }
     }

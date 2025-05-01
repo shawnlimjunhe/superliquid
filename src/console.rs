@@ -70,7 +70,7 @@ async fn handle_drip(
         return Ok(());
     };
 
-    message_protocol::send_drip(client_writer, &client.pk_str).await?;
+    message_protocol::send_drip(client_writer, &client.pk_str.to_bytes()).await?;
 
     Ok(())
 }
@@ -113,7 +113,7 @@ async fn handle_transfer(
     let amount = parts[1].parse::<u128>().expect("To be non negative number");
 
     let account_info = message_protocol::send_account_query(
-        client.pk_str.clone(),
+        client.pk_str.to_bytes(),
         client_connection.reader.clone(),
         client_connection.writer.clone(),
     )
@@ -125,8 +125,8 @@ async fn handle_transfer(
     }
 
     let txn = UnsignedTransaction::Transfer(TransferTransaction {
-        from: client.pk_str.clone(),
-        to: to_pk,
+        from: client.pk_str.to_bytes(),
+        to: to_pk.to_bytes(),
         amount,
         nonce: account_info.nonce + 1,
     });
@@ -147,7 +147,7 @@ async fn handle_query(
     };
 
     let account_info = message_protocol::send_account_query(
-        client.pk_str.clone(),
+        client.pk_str.to_bytes(),
         client_connection.reader.clone(),
         client_connection.writer.clone(),
     )

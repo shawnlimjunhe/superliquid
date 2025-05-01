@@ -7,7 +7,7 @@ use crate::network;
 use crate::node::state::PeerId;
 use crate::state::state::AccountInfo;
 use crate::types::message::Message;
-use crate::types::transaction::{PublicKeyString, SignedTransaction};
+use crate::types::transaction::{PublicKeyHash, Sha256Hash, SignedTransaction};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 
@@ -16,9 +16,9 @@ pub enum AppMessage {
     Query,
     SubmitTransaction(SignedTransaction),
     Response(Vec<SignedTransaction>),
-    Drip(PublicKeyString),
+    Drip(PublicKeyHash),
     Ack,
-    AccountQuery(PublicKeyString),
+    AccountQuery(PublicKeyHash),
     AccountQueryResponse(AccountInfo),
 }
 
@@ -78,14 +78,14 @@ pub async fn send_transaction(
     send_message(writer, &Message::Application(msg)).await
 }
 
-pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_str: &PublicKeyString) -> Result<()> {
-    let msg = AppMessage::Drip(pk_str.clone());
+pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_bytes: &Sha256Hash) -> Result<()> {
+    let msg = AppMessage::Drip(*pk_bytes);
 
     send_message(writer, &Message::Application(msg)).await
 }
 
 pub async fn send_account_query(
-    account_public_key: PublicKeyString,
+    account_public_key: PublicKeyHash,
     reader: Arc<Mutex<OwnedReadHalf>>,
     writer: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<AccountInfo> {
@@ -212,7 +212,7 @@ mod tests {
         let first_tx = &txs[0];
         match &first_tx.tx {
             crate::types::transaction::UnsignedTransaction::Transfer(transfer_transaction) => {
-                assert_eq!(transfer_transaction.from, get_alice_pk_str());
+                assert_eq!(transfer_transaction.from, get_alice_pk_str().to_bytes());
             }
         }
 

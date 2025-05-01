@@ -12,16 +12,14 @@ use crate::{
     state::state::AccountInfo,
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
-        transaction::{
-            PublicKeyString, SignedTransaction, TransferTransaction, UnsignedTransaction,
-        },
+        transaction::{PublicKeyHash, SignedTransaction, TransferTransaction, UnsignedTransaction},
     },
 };
 
 use super::listener::ClientSocket;
 
 pub struct ClientQuery {
-    pub account: PublicKeyString,
+    pub account: PublicKeyHash,
 }
 
 pub struct ClientResponse {
@@ -62,7 +60,7 @@ pub(super) async fn handle_client_connection(
 }
 
 pub(super) async fn send_query_to_replica(
-    pk_hex: &PublicKeyString,
+    pk_bytes: &PublicKeyHash,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<ClientResponse> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -70,9 +68,7 @@ pub(super) async fn send_query_to_replica(
     // Request info from replica to oneshot channel
     to_replica_tx
         .send(ReplicaInBound::Query(QueryRequest {
-            query: ClientQuery {
-                account: pk_hex.clone(),
-            },
+            query: ClientQuery { account: *pk_bytes },
             response_channel: response_tx,
         }))
         .await
@@ -87,10 +83,10 @@ pub(super) async fn send_query_to_replica(
 
 pub(super) async fn handle_account_query(
     writer: Arc<Mutex<OwnedWriteHalf>>,
-    pk_hex: PublicKeyString,
+    pk_bytes: PublicKeyHash,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
-    let response = send_query_to_replica(&pk_hex, to_replica_tx).await?;
+    let response = send_query_to_replica(&pk_bytes, to_replica_tx).await?;
     // send to client
     message_protocol::send_message(
         writer,
@@ -101,17 +97,17 @@ pub(super) async fn handle_account_query(
 
 pub(super) async fn handle_drip(
     node: &Arc<Node>,
-    pk_hex: PublicKeyString,
+    pk_bytes: PublicKeyHash,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let mut faucet_key = node.faucet_key.clone();
-    let faucet_pk_str = PublicKeyString::from_public_key(&faucet_key.verifying_key());
+    let faucet_pk_bytes = faucet_key.verifying_key().to_bytes();
 
-    let response = send_query_to_replica(&faucet_pk_str, to_replica_tx.clone()).await?;
+    let response = send_query_to_replica(&faucet_pk_bytes, to_replica_tx.clone()).await?;
 
     let drip_txn = UnsignedTransaction::Transfer(TransferTransaction {
-        to: pk_hex,
-        from: PublicKeyString::from_public_key(&faucet_key.verifying_key()),
+        to: pk_bytes,
+        from: faucet_pk_bytes,
         amount: 100000,
         nonce: response.account_info.nonce + 1,
     });

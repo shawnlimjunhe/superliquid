@@ -15,13 +15,14 @@ pub enum UnsignedTransaction {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TransferTransaction {
-    pub from: PublicKeyString,
-    pub to: PublicKeyString,
+    pub from: PublicKeyHash,
+    pub to: PublicKeyHash,
     pub amount: u128,
     pub nonce: Nonce,
 }
 
 pub type Sha256Hash = [u8; 32];
+pub type PublicKeyHash = Sha256Hash;
 
 impl UnsignedTransaction {
     pub fn hash(&self) -> Sha256Hash {
@@ -62,7 +63,8 @@ impl SignedTransaction {
     pub fn verify_sender(&self) -> bool {
         match &self.tx {
             UnsignedTransaction::Transfer(transfer_transaction) => {
-                let public_key = transfer_transaction.from.as_public_key();
+                let public_key =
+                    PublicKeyString::from_bytes(transfer_transaction.from).as_public_key();
                 let tx_hash = self.hash;
                 let signature = utils::string_to_sig(&self.signature.as_str())
                     .expect("Conversion from string to signature failed");
@@ -199,8 +201,8 @@ mod tests {
     fn test_transfer_transaction_hash_consistency() {
         let (_, vk) = generate_keypair();
         let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
-            from: PublicKeyString::from_public_key(&vk),
-            to: PublicKeyString::default(),
+            from: vk.to_bytes(),
+            to: PublicKeyString::default().to_bytes(),
             amount: 42,
             nonce: 0,
         });
@@ -217,8 +219,8 @@ mod tests {
     fn test_sign_and_verify_transfer_transaction() {
         let (mut sk, vk) = generate_keypair();
         let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
-            from: PublicKeyString::from_public_key(&vk),
-            to: PublicKeyString::default(),
+            from: vk.to_bytes(),
+            to: PublicKeyString::default().to_bytes(),
             amount: 100,
             nonce: 0,
         });
@@ -319,8 +321,8 @@ mod tests {
         fn test_unsigned_transaction_equality() {
             let (_, vk) = generate_keypair();
             let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk),
-                to: PublicKeyString::default(),
+                from: vk.to_bytes(),
+                to: PublicKeyString::default().to_bytes(),
                 amount: 123,
                 nonce: 0,
             });
@@ -333,15 +335,15 @@ mod tests {
         fn test_unsigned_transaction_inequality() {
             let (_, vk) = generate_keypair();
             let tx1 = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk),
-                to: PublicKeyString::default(),
+                from: vk.to_bytes(),
+                to: PublicKeyString::default().to_bytes(),
                 amount: 123,
                 nonce: 0,
             });
 
             let tx2 = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk),
-                to: PublicKeyString::default(),
+                from: vk.to_bytes(),
+                to: PublicKeyString::default().to_bytes(),
                 amount: 456,
                 nonce: 0,
             });
@@ -362,8 +364,8 @@ mod tests {
             let (_sk2, vk2) = generate_keypair(); // wrong key
 
             let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk2), // set from wrong key
-                to: PublicKeyString::default(),
+                from: vk2.to_bytes(), // set from wrong key
+                to: PublicKeyString::default().to_bytes(),
                 amount: 100,
                 nonce: 0,
             });
@@ -382,15 +384,15 @@ mod tests {
             let (mut sk2, vk2) = generate_keypair();
 
             let unsigned1 = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk1),
-                to: PublicKeyString::default(),
+                from: vk1.to_bytes(),
+                to: PublicKeyString::default().to_bytes(),
                 amount: 50,
                 nonce: 0,
             });
 
             let unsigned2 = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk2),
-                to: PublicKeyString::default(),
+                from: vk2.to_bytes(),
+                to: PublicKeyString::default().to_bytes(),
                 amount: 50,
                 nonce: 0,
             });
@@ -409,8 +411,8 @@ mod tests {
             let (mut sk, vk) = generate_keypair();
 
             let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
-                from: PublicKeyString::from_public_key(&vk),
-                to: PublicKeyString::default(),
+                from: vk.to_bytes(),
+                to: PublicKeyString::default().to_bytes(),
                 amount: 777,
                 nonce: 0,
             });
