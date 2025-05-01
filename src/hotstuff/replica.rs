@@ -70,10 +70,11 @@ pub struct HotStuffReplica {
     pub validator_set: HashSet<VerifyingKey>,
     signing_key: SigningKey,
 
+    // Arc is needed as we are sending our replica across threads
     generic_qc: Arc<QuorumCertificate>,
     locked_qc: Arc<QuorumCertificate>,
 
-    current_proposal: Option<Block>,
+    current_proposal: Option<Arc<Block>>,
     mempool: PriorityMempool,
     pending_transactions: HashMap<Sha256Hash, SignedTransaction>,
     committed_transactions: HashMap<Sha256Hash, SignedTransaction>,
@@ -84,7 +85,7 @@ pub struct HotStuffReplica {
     pub rep_node_channel: ReplicaSender,
 
     // State
-    blockstore: HashMap<BlockHash, Block>,
+    blockstore: HashMap<BlockHash, Arc<Block>>,
     ledger_state: LedgerState,
 
     // view specifc flag: for view idempotency
@@ -101,8 +102,8 @@ impl HotStuffReplica {
         let signing_key = config::retrieve_signing_key_checked(node_id);
 
         let (genesis_block, genesis_qc) = Block::create_genesis_block();
-        let mut blockstore: HashMap<BlockHash, Block> = HashMap::new();
-        blockstore.insert(genesis_block.hash(), genesis_block.clone());
+        let mut blockstore: HashMap<BlockHash, Arc<Block>> = HashMap::new();
+        blockstore.insert(genesis_block.hash(), Arc::new(genesis_block.clone()));
 
         let genesis_qc = Arc::new(genesis_qc);
         HotStuffReplica {
@@ -289,34 +290,31 @@ impl HotStuffReplica {
         return outbound_msg;
     }
 
-    fn get_justified_block(&self, block: &Block) -> Option<&Block> {
-        let hash = match block {
+    fn get_justified_block(&self, block: Arc<Block>) -> Option<Arc<Block>> {
+        let hash = match &*block {
             Block::Normal { justify, .. } => &justify.block_hash,
             Block::Genesis { .. } => return None,
         };
-        self.blockstore.get(hash)
+        self.blockstore.get(hash).cloned()
     }
 
-    /// Return owned clones, not references:
-    fn get_justifed_block_and_qc_cloned(
+    fn get_justifed_block_and_qc(
         &self,
-        block: &Block,
-    ) -> (Option<Block>, Option<QuorumCertificate>) {
-        let justify = match block {
+        block: Arc<Block>,
+    ) -> (Option<Arc<Block>>, Option<QuorumCertificate>) {
+        let justify = match &*block {
             Block::Normal { justify, .. } => justify,
             Block::Genesis { .. } => return (None, None),
         };
 
-        // Clone the child block from the store so we get an owned `Block`
-        let child_block = self.blockstore.get(&justify.block_hash);
-
-        (child_block.cloned(), Some(justify.clone()))
+        let child_block = self.blockstore.get(&justify.block_hash).cloned();
+        (child_block, Some(justify.clone()))
     }
 
-    fn is_parent(&self, block_child: &Block, block_parent: &Block) -> bool {
-        match block_child {
+    fn is_parent(&self, block_child: Arc<Block>, block_parent: Arc<Block>) -> bool {
+        match *block_child {
             Block::Genesis { .. } => false,
-            Block::Normal { parent_id, .. } => block_parent.hash() == *parent_id,
+            Block::Normal { parent_id, .. } => block_parent.hash() == parent_id,
         }
     }
     fn add_block_transactions_to_pending(&mut self, block: &Block) {
@@ -415,9 +413,11 @@ impl HotStuffReplica {
                 (*self.generic_qc).clone(),
             );
 
+            let sending_block = new_block.clone();
+            let new_block = Arc::new(new_block);
             self.blockstore.insert(new_block.hash(), new_block.clone());
 
-            self.current_proposal = Some(new_block.clone());
+            self.current_proposal = Some(new_block);
             replica_debug!(
                 self.node_id,
                 self.pacemaker.curr_view,
@@ -425,7 +425,7 @@ impl HotStuffReplica {
             );
 
             // leader should also vote for their own message
-            return Some(self.leader_create_message(new_block));
+            return Some(self.leader_create_message(sending_block));
         }
         // is not new view
 
@@ -524,11 +524,12 @@ impl HotStuffReplica {
             replica_debug!(self.node_id, self.pacemaker.curr_view, "No node in message");
             return None;
         };
+        let b_star = Arc::new(b_star);
         self.blockstore.insert(b_star.hash(), b_star.clone());
 
         // b″ := b*.justify.node
         let (Some(b_double_prime), Some(b_star_justify)) =
-            self.get_justifed_block_and_qc_cloned(&b_star)
+            self.get_justifed_block_and_qc(b_star.clone())
         else {
             replica_debug!(
                 self.node_id,
@@ -537,6 +538,8 @@ impl HotStuffReplica {
             );
             return None;
         };
+
+        let b_star_justify = Arc::new(b_star_justify.clone());
 
         let curr_view = self.pacemaker.curr_view;
 
@@ -562,10 +565,10 @@ impl HotStuffReplica {
             return outbound_msg;
         }
 
-        if !self.is_parent(&b_star, &b_double_prime) {
+        if !self.is_parent(b_star, b_double_prime.clone()) {
             return outbound_msg;
         }
-        self.generic_qc = Arc::new(b_star_justify.clone());
+        self.generic_qc = b_star_justify.clone();
 
         self.messages.prune_before_view(self.generic_qc.view_number);
 
@@ -577,7 +580,7 @@ impl HotStuffReplica {
 
         // b′ := b″.justify.node
         let (Some(b_prime), Some(b_double_prime_justify)) =
-            self.get_justifed_block_and_qc_cloned(&b_double_prime)
+            self.get_justifed_block_and_qc(b_double_prime.clone())
         else {
             replica_debug!(
                 self.node_id,
@@ -587,17 +590,19 @@ impl HotStuffReplica {
             return outbound_msg;
         };
 
-        if !self.is_parent(&b_double_prime, &b_prime) {
+        let b_double_prime_justify = Arc::new(b_double_prime_justify.clone());
+
+        if !self.is_parent(b_double_prime, b_prime.clone()) {
             return outbound_msg;
         }
 
-        self.locked_qc = Arc::new(b_double_prime_justify);
+        self.locked_qc = b_double_prime_justify.clone();
         self.pacemaker
             .set_last_committed_view(self.locked_qc.clone());
 
         // b := b′.justify.node
         let commited_block = {
-            let Some(b) = self.get_justified_block(&b_prime) else {
+            let Some(b) = self.get_justified_block(b_prime.clone()) else {
                 replica_debug!(
                     self.node_id,
                     self.pacemaker.curr_view,
@@ -606,10 +611,10 @@ impl HotStuffReplica {
                 return outbound_msg;
             };
 
-            if !self.is_parent(&b_prime, b) {
+            if !self.is_parent(b_prime, b.clone()) {
                 return outbound_msg;
             }
-            b.clone()
+            b
         };
 
         replica_log!(self.node_id, "Commit success on view: {:?}", curr_view);

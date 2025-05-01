@@ -1,4 +1,4 @@
-use std::{collections::HashMap, vec};
+use std::{collections::HashMap, sync::Arc, vec};
 
 use crate::types::transaction::{Sha256Hash, SignedTransaction};
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ impl Block {
     pub fn extends_from(
         &self,
         locked_block_hash: BlockHash,
-        block_store: &HashMap<BlockHash, Block>,
+        block_store: &HashMap<BlockHash, Arc<Block>>,
     ) -> bool {
         let mut current = self;
 
