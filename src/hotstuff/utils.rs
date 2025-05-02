@@ -10,7 +10,7 @@ pub fn get_highest_qc_from_votes<'a>(votes: &'a MessageWindow) -> Option<&'a Quo
     votes
         .iter()
         .filter_map(|msg| msg.justify.as_ref())
-        .max_by_key(|qc| qc.view_number)
+        .max_by_key(|&qc| qc.view_number)
 }
 
 pub(crate) fn has_quorum_votes_for_view(

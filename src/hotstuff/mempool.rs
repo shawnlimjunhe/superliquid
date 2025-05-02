@@ -42,6 +42,7 @@ enum Priority {
 /// - Transactions are immediately removed from `account_queues` after execution.
 /// - Memory safety is guaranteed by strict immediate removal of executed transactions, preventing stale references.
 pub struct PriorityMempool {
+    length: usize,
     account_queues: HashMap<PublicKeyHash, AccountQueue>,
     /// VecDeque is chosen for fast push/pop from both ends.
     /// - Liquidations and cancels are processed first.
@@ -52,6 +53,7 @@ pub struct PriorityMempool {
 impl PriorityMempool {
     pub fn new() -> Self {
         PriorityMempool {
+            length: 0,
             account_queues: HashMap::new(),
             priority_buckets: Default::default(),
         }
@@ -74,7 +76,7 @@ impl PriorityMempool {
                     self.priority_buckets[Priority::Other as usize]
                         .push_back((transfer_tx.from.clone(), expected_nonce));
                 }
-
+                self.length += 1;
                 account.insert(transfer_tx.nonce, txn);
             }
         }
@@ -84,7 +86,10 @@ impl PriorityMempool {
         for priority in [Priority::Liquidation, Priority::Cancel, Priority::Other] {
             if let Some((pk, nonce)) = self.priority_buckets[priority as usize].pop_front() {
                 match self.account_queues.get_mut(&pk) {
-                    Some(account_queue) => return account_queue.remove(&nonce),
+                    Some(account_queue) => {
+                        self.length -= 1;
+                        return account_queue.remove(&nonce);
+                    }
                     None => return None,
                 }
             }
@@ -93,11 +98,7 @@ impl PriorityMempool {
     }
 
     pub fn len(&self) -> usize {
-        let mut sum = 0;
-        for priority in [Priority::Liquidation, Priority::Cancel, Priority::Other] {
-            sum += self.priority_buckets[priority as usize].len();
-        }
-        sum
+        self.length
     }
 
     pub fn update_after_execution(&mut self, accounts_nonces: Vec<Option<(PublicKeyHash, Nonce)>>) {
