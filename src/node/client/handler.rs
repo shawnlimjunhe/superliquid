@@ -109,7 +109,7 @@ pub(super) async fn handle_drip(
         to: pk_bytes,
         from: faucet_pk_bytes,
         amount: 100000,
-        nonce: response.account_info.nonce + 1,
+        nonce: response.account_info.expected_nonce,
     });
 
     let drip_txn = drip_txn.sign(&mut faucet_key);

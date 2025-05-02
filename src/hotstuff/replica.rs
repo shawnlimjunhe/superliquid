@@ -772,7 +772,7 @@ impl HotStuffReplica {
         match &txn.tx {
             UnsignedTransaction::Transfer(transfer_transaction) => {
                 let account_info = self.ledger_state.retrieve_by_pk(&transfer_transaction.from);
-                self.mempool.insert(txn, account_info.nonce + 1);
+                self.mempool.insert(txn, account_info.expected_nonce);
             }
         }
     }

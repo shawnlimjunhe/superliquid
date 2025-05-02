@@ -128,7 +128,7 @@ async fn handle_transfer(
         from: client.pk_str.to_bytes(),
         to: to_pk.to_bytes(),
         amount,
-        nonce: account_info.nonce + 1,
+        nonce: account_info.expected_nonce + 1,
     });
 
     let tx = txn.sign(&mut client.sk);

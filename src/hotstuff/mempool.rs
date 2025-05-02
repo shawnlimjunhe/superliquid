@@ -102,14 +102,102 @@ impl PriorityMempool {
     }
 
     pub fn update_after_execution(&mut self, accounts_nonces: Vec<Option<(PublicKeyHash, Nonce)>>) {
-        for (pk, expected_nonce) in accounts_nonces.into_iter().flatten() {
+        for (pk, next_expected_nonce) in accounts_nonces.into_iter().flatten() {
             let Some(account) = self.account_queues.get_mut(&pk) else {
                 continue;
             };
 
-            if account.contains_key(&expected_nonce) {
-                self.priority_buckets[Priority::Other as usize].push_back((pk, expected_nonce));
+            if account.contains_key(&next_expected_nonce) {
+                self.priority_buckets[Priority::Other as usize]
+                    .push_back((pk, next_expected_nonce));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::state::Nonce;
+    use crate::test_utils::test_helpers::get_alice_sk;
+    use crate::types::transaction::{SignedTransaction, TransferTransaction};
+
+    fn mock_tx(pk: PublicKeyHash, nonce: Nonce) -> SignedTransaction {
+        let mut alice_sk = get_alice_sk();
+        let tx = UnsignedTransaction::Transfer(TransferTransaction {
+            from: pk,
+            to: [2u8; 32],
+            amount: 10,
+            nonce,
+        });
+        tx.sign(&mut alice_sk)
+    }
+
+    #[test]
+    fn test_len() {
+        let pk = [1u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx = mock_tx(pk, 0);
+        mempool.insert(tx, 0);
+        assert_eq!(mempool.len(), 1);
+        mempool.pop_next();
+        assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_pop_next_returns_ready_tx() {
+        let pk = [1u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx = mock_tx(pk, 0);
+        mempool.insert(tx.clone(), 0);
+        let popped = mempool.pop_next().unwrap();
+        assert_eq!(popped.hash, tx.hash);
+        assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_pop_next_does_not_return_future_tx() {
+        let pk = [1u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx = mock_tx(pk, 1);
+        mempool.insert(tx.clone(), 0);
+        let popped = mempool.pop_next();
+        assert!(popped.is_none());
+        assert_eq!(mempool.len(), 1);
+    }
+
+    #[test]
+    fn test_insert_ignores_old_nonce() {
+        let pk = [1u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx = mock_tx(pk, 0);
+        mempool.insert(tx.clone(), 1); // old nonce
+        assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_update_after_execution_pushes_ready_nonce() {
+        let pk = [1u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        // Insert two txs: nonce 0 (ready), 1 (future)
+        let tx0 = mock_tx(pk, 0);
+        let tx1 = mock_tx(pk, 1);
+        mempool.insert(tx0, 0);
+        mempool.insert(tx1.clone(), 0);
+
+        let tx = mempool.pop_next().unwrap();
+        // Execute nonce 0
+        let next_nonce = Some((pk, 1));
+        mempool.update_after_execution(vec![next_nonce]);
+
+        // Should now pop tx1
+        let tx = mempool.pop_next().unwrap();
+
+        assert_eq!(tx.hash, tx1.hash);
     }
 }

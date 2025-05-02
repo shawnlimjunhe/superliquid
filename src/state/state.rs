@@ -13,7 +13,7 @@ pub type Nonce = u64;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AccountInfo {
     pub balance: Balance,
-    pub nonce: Nonce,
+    pub expected_nonce: Nonce,
     _private: (), // prevent creation of accountinfo outside of this struct
 }
 
@@ -21,7 +21,7 @@ impl AccountInfo {
     pub(crate) fn new() -> Self {
         Self {
             balance: 0, // Create 100 for now
-            nonce: 0,
+            expected_nonce: 0,
             _private: (),
         }
     }
@@ -29,7 +29,7 @@ impl AccountInfo {
     fn create_faucet() -> Self {
         Self {
             balance: u128::MAX,
-            nonce: 0,
+            expected_nonce: 0,
             _private: (),
         }
     }
@@ -43,6 +43,10 @@ pub enum ExecError {
         need: u128,
     },
     DuplicateNonce {
+        from: PublicKeyString,
+        nonce: Nonce,
+    },
+    OutOfOrderNonce {
         from: PublicKeyString,
         nonce: Nonce,
     },
@@ -91,7 +95,7 @@ impl LedgerState {
                         });
                     }
 
-                    if from_info.nonce + 1 != tx.nonce {
+                    if from_info.expected_nonce < tx.nonce {
                         println!("Duplicate nonce");
                         return Err(ExecError::DuplicateNonce {
                             from: PublicKeyString::from_bytes(tx.from),
@@ -99,14 +103,22 @@ impl LedgerState {
                         });
                     }
 
+                    if from_info.expected_nonce > tx.nonce {
+                        println!("Out of order nonce");
+                        return Err(ExecError::OutOfOrderNonce {
+                            from: PublicKeyString::from_bytes(tx.from),
+                            nonce: tx.nonce,
+                        });
+                    }
+
                     from_info.balance -= tx.amount;
-                    from_info.nonce += 1;
-                    let new_nonce = from_info.nonce;
+                    from_info.expected_nonce += 1;
+                    let new_expected_nonce = from_info.expected_nonce;
 
                     let to_info = self.retrieve_by_pk_mut(&tx.to);
                     to_info.balance += tx.amount;
 
-                    account_nonces.push(Some((tx.from, new_nonce)));
+                    account_nonces.push(Some((tx.from, new_expected_nonce)));
                 }
             }
         }
