@@ -190,7 +190,7 @@ mod tests {
         mempool.insert(tx0, 0);
         mempool.insert(tx1.clone(), 0);
 
-        let tx = mempool.pop_next().unwrap();
+        let _ = mempool.pop_next().unwrap();
         // Execute nonce 0
         let next_nonce = Some((pk, 1));
         mempool.update_after_execution(vec![next_nonce]);
