@@ -118,6 +118,7 @@ impl PriorityMempool {
             if account.contains_key(&next_expected_nonce) {
                 self.priority_buckets[Priority::Other as usize]
                     .push_back((pk, next_expected_nonce));
+                self.ready_transactions_length += 1;
             }
         }
     }
@@ -164,6 +165,26 @@ mod tests {
         assert_eq!(mempool.ready_transactions_length(), 1);
         let popped = mempool.pop_next().unwrap();
         assert_eq!(popped.hash, tx.hash);
+        assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_pop_next_returns_ready_tx_in_insertion_order() {
+        let pk_1 = [1u8; 32];
+        let pk_2 = [2u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx_1 = mock_tx(pk_1, 0);
+        let tx_2 = mock_tx(pk_2, 0);
+        mempool.insert(tx_1.clone(), 0);
+        mempool.insert(tx_2.clone(), 0);
+        assert_eq!(mempool.ready_transactions_length(), 2);
+        let popped = mempool.pop_next().unwrap();
+        assert_eq!(popped.hash, tx_1.hash);
+        assert_eq!(mempool.len(), 1);
+
+        let popped = mempool.pop_next().unwrap();
+        assert_eq!(popped.hash, tx_2.hash);
         assert_eq!(mempool.len(), 0);
     }
 
