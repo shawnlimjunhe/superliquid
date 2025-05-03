@@ -23,6 +23,8 @@ enum Priority {
     Other = 2,
 }
 
+type PriorityIndex = (PublicKeyHash, Nonce);
+
 /// PriorityMempool organizes transactions for fast block proposal selection.
 ///
 /// # Design Goals
@@ -48,7 +50,7 @@ pub struct PriorityMempool {
     /// VecDeque is chosen for fast push/pop from both ends.
     /// - Liquidations and cancels are processed first.
     /// - Transfers are processed after urgent actions are handled.
-    priority_buckets: [VecDeque<(PublicKeyHash, Nonce)>; PRIORITY_LEVELS as usize],
+    priority_buckets: [VecDeque<PriorityIndex>; PRIORITY_LEVELS as usize],
 }
 
 impl PriorityMempool {
@@ -86,19 +88,56 @@ impl PriorityMempool {
     }
 
     pub fn pop_next(&mut self) -> Option<SignedTransaction> {
-        for priority in [Priority::Liquidation, Priority::Cancel, Priority::Other] {
+        let priorities = [Priority::Liquidation, Priority::Cancel, Priority::Other];
+
+        for priority in priorities {
             if let Some((pk, nonce)) = self.priority_buckets[priority as usize].pop_front() {
-                match self.account_queues.get_mut(&pk) {
-                    Some(account_queue) => {
-                        self.length -= 1;
-                        self.ready_transactions_length -= 1;
-                        return account_queue.remove(&nonce);
-                    }
-                    None => return None,
+                if let Some(account_queue) = self.account_queues.get_mut(&pk) {
+                    self.length -= 1;
+                    self.ready_transactions_length -= 1;
+                    return account_queue.remove(&nonce);
                 }
             }
         }
         None
+    }
+
+    pub fn pop_next_n(&mut self, n: usize) -> Vec<SignedTransaction> {
+        let mut result: Vec<SignedTransaction> = Vec::with_capacity(n);
+        let mut keys: Vec<PriorityIndex> = Vec::with_capacity(n);
+
+        let priorities = [Priority::Liquidation, Priority::Cancel, Priority::Other];
+
+        if self.ready_transactions_length() < n {
+            // drain all ready pools
+            for priority in priorities {
+                let bucket = &mut self.priority_buckets[priority as usize];
+                keys.extend(bucket.drain(..));
+            }
+        } else {
+            let mut remaining = n;
+            for priority in priorities {
+                let bucket = &mut self.priority_buckets[priority as usize];
+                let take = remaining.min(bucket.len());
+
+                keys.extend(bucket.drain(0..take));
+                remaining -= take;
+
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        for (pk, nonce) in keys {
+            if let Some(account_queue) = self.account_queues.get_mut(&pk) {
+                if let Some(transaction) = account_queue.remove(&nonce) {
+                    self.length -= 1;
+                    self.ready_transactions_length -= 1;
+                    result.push(transaction);
+                }
+            }
+        }
+        return result;
     }
 
     pub fn len(&self) -> usize {
@@ -232,5 +271,63 @@ mod tests {
         let tx = mempool.pop_next().unwrap();
 
         assert_eq!(tx.hash, tx1.hash);
+    }
+
+    #[test]
+    fn test_pop_next_n_with_fewer_ready_than_n() {
+        let pk = [1u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx0 = mock_tx(pk, 0);
+        let tx1 = mock_tx(pk, 1);
+
+        mempool.insert(tx0.clone(), 0);
+        mempool.insert(tx1.clone(), 0); // tx1 is not ready yet
+
+        let popped = mempool.pop_next_n(2);
+        assert_eq!(popped.len(), 1);
+        assert_eq!(popped[0].hash, tx0.hash);
+        assert_eq!(mempool.len(), 1);
+    }
+
+    #[test]
+    fn test_pop_next_n_exactly_n_ready() {
+        let pk1 = [1u8; 32];
+        let pk2 = [2u8; 32];
+        let pk3 = [3u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx1 = mock_tx(pk1, 0);
+        let tx2 = mock_tx(pk2, 0);
+        let tx3 = mock_tx(pk3, 0);
+
+        mempool.insert(tx1.clone(), 0);
+        mempool.insert(tx2.clone(), 0);
+        mempool.insert(tx3.clone(), 0);
+
+        let popped = mempool.pop_next_n(3);
+        assert_eq!(popped.len(), 3);
+        assert!(popped.iter().any(|tx| tx.hash == tx1.hash));
+        assert!(popped.iter().any(|tx| tx.hash == tx2.hash));
+        assert!(popped.iter().any(|tx| tx.hash == tx3.hash));
+        assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_pop_next_n_updates_state() {
+        let pk1 = [1u8; 32];
+        let pk2 = [2u8; 32];
+        let mut mempool = PriorityMempool::new();
+
+        let tx1 = mock_tx(pk1, 0);
+        let tx2 = mock_tx(pk2, 0);
+
+        mempool.insert(tx1.clone(), 0);
+        mempool.insert(tx2.clone(), 0);
+
+        let _ = mempool.pop_next_n(2);
+
+        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool.ready_transactions_length(), 0);
     }
 }
