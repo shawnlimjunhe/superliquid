@@ -260,7 +260,7 @@ impl HotStuffReplica {
     /// Selects a transaction from the mempool and
     fn select_transactions(&mut self) -> Vec<SignedTransaction> {
         // return 1 transaction for now
-        while self.mempool.len() > 0 {
+        while self.mempool.ready_transactions_length() > 0 {
             let Some(txn) = self.mempool.pop_next() else {
                 return vec![];
             };
@@ -393,11 +393,11 @@ impl HotStuffReplica {
             let parent = {
                 let Some(parent) = self.blockstore.get(&self.generic_qc.block_hash) else {
                     // cant find QC's block
-                    replica_debug!(
-                        self.node_id,
-                        self.pacemaker.curr_view,
-                        "cant find qc's block: L"
-                    );
+                    // replica_debug!(
+                    //     self.node_id,
+                    //     self.pacemaker.curr_view,
+                    //     "cant find qc's block: L"
+                    // );
                     return None;
                 };
                 parent.clone()
@@ -418,11 +418,11 @@ impl HotStuffReplica {
             self.blockstore.insert(new_block.hash(), new_block.clone());
 
             self.current_proposal = Some(new_block);
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Success: Leader:: Prepare"
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Success: Leader:: Prepare"
+            // );
 
             // leader should also vote for their own message
             return Some(self.leader_create_message(sending_block));
@@ -444,31 +444,31 @@ impl HotStuffReplica {
                 Some(qc) => {
                     self.generic_qc = Arc::new(qc);
                     self.messages.prune_before_view(self.generic_qc.view_number);
-                    replica_debug!(self.node_id, self.pacemaker.curr_view, "Able to form QC");
+                    // replica_debug!(self.node_id, self.pacemaker.curr_view, "Able to form QC");
                 }
 
                 None => {
                     // Unable to form a QC, continue propose new block justified from highest qc or generic qc
-                    replica_debug!(self.node_id, self.pacemaker.curr_view, "Unable to form QC");
+                    // replica_debug!(self.node_id, self.pacemaker.curr_view, "Unable to form QC");
                     return None;
                 }
             }
         }
 
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "waiting for quorum (n - f)",
-        );
+        // replica_debug!(
+        //     self.node_id,
+        //     self.pacemaker.curr_view,
+        //     "waiting for quorum (n - f)",
+        // );
         return None;
     }
 
     pub fn replica_handle_message(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
-        replica_log!(
-            self.node_id,
-            "Replica handle message with at view: {:?}",
-            self.pacemaker.curr_view
-        );
+        // replica_log!(
+        //     self.node_id,
+        //     "Replica handle message with at view: {:?}",
+        //     self.pacemaker.curr_view
+        // );
 
         let curr_view = self.pacemaker.curr_view;
 
@@ -510,18 +510,18 @@ impl HotStuffReplica {
 
         if msg.sender != self.pacemaker.get_leader_for_view(self.pacemaker.curr_view) {
             // Ignore messages not from leader of the current view
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "msg sender: {:?} is not the leader. Leader is: {:?}",
-                msg.sender,
-                self.pacemaker.get_leader_for_view(curr_view)
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "msg sender: {:?} is not the leader. Leader is: {:?}",
+            //     msg.sender,
+            //     self.pacemaker.get_leader_for_view(curr_view)
+            // );
             return None;
         }
         // b*
         let Some(b_star) = msg.node.clone() else {
-            replica_debug!(self.node_id, self.pacemaker.curr_view, "No node in message");
+            // replica_debug!(self.node_id, self.pacemaker.curr_view, "No node in message");
             return None;
         };
         let b_star = Arc::new(b_star);
@@ -531,11 +531,11 @@ impl HotStuffReplica {
         let (Some(b_double_prime), Some(b_star_justify)) =
             self.get_justifed_block_and_qc(b_star.clone())
         else {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Missing b″ justified by b* or missing justify on b*"
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Missing b″ justified by b* or missing justify on b*"
+            // );
             return None;
         };
 
@@ -555,12 +555,12 @@ impl HotStuffReplica {
         if is_safe && is_valid_sig {
             outbound_msg = Some(self.vote_message(&b_star, None));
             self.add_block_transactions_to_pending(&b_star);
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "voting for block, b*: {:?}",
-                b_star.transactions()
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "voting for block, b*: {:?}",
+            //     b_star.transactions()
+            // );
         } else {
             return outbound_msg;
         }
@@ -572,21 +572,21 @@ impl HotStuffReplica {
 
         self.messages.prune_before_view(self.generic_qc.view_number);
 
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "Start commit phase on b*'s grandparent",
-        );
+        // replica_debug!(
+        //     self.node_id,
+        //     self.pacemaker.curr_view,
+        //     "Start commit phase on b*'s grandparent",
+        // );
 
         // b′ := b″.justify.node
         let (Some(b_prime), Some(b_double_prime_justify)) =
             self.get_justifed_block_and_qc(b_double_prime.clone())
         else {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Missing b′ justified by b″"
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Missing b′ justified by b″"
+            // );
             return outbound_msg;
         };
 
@@ -603,11 +603,11 @@ impl HotStuffReplica {
         // b := b′.justify.node
         let commited_block = {
             let Some(b) = self.get_justified_block(b_prime.clone()) else {
-                replica_debug!(
-                    self.node_id,
-                    self.pacemaker.curr_view,
-                    "Missing b justified by b′"
-                );
+                // replica_debug!(
+                //     self.node_id,
+                //     self.pacemaker.curr_view,
+                //     "Missing b justified by b′"
+                // );
                 return outbound_msg;
             };
 
@@ -618,12 +618,12 @@ impl HotStuffReplica {
         };
 
         replica_log!(self.node_id, "Commit success on view: {:?}", curr_view);
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "Applying transaction, {:?}",
-            &commited_block.transactions()
-        );
+        // replica_debug!(
+        //     self.node_id,
+        //     self.pacemaker.curr_view,
+        //     "Applying transaction, {:?}",
+        //     &commited_block.transactions()
+        // );
         let account_nonces = self.ledger_state.apply_block(&commited_block);
         self.remove_block_transactions_from_pending(&commited_block);
         self.add_block_transactions_to_committed(&commited_block);
@@ -639,12 +639,12 @@ impl HotStuffReplica {
 
     async fn handle_message(&mut self, msg: HotStuffMessage) -> Result<(), std::io::Error> {
         if self.sync_view(&msg) {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Recieved higher view message from node: {:?}",
-                msg.sender
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Recieved higher view message from node: {:?}",
+            //     msg.sender
+            // );
             self.reset_view_flags();
             // advance view if view is behind
             let is_leader = self.pacemaker.current_leader() == self.node_id;
@@ -656,13 +656,13 @@ impl HotStuffReplica {
         }
 
         if msg.view_number + 1 < self.pacemaker.curr_view {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Recieved stale message from view: {:?} from node: {:?}",
-                msg.view_number,
-                msg.sender
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Recieved stale message from view: {:?} from node: {:?}",
+            //     msg.view_number,
+            //     msg.sender
+            // );
         }
 
         self.messages.push(msg.clone());
@@ -697,13 +697,13 @@ impl HotStuffReplica {
                 .pacemaker
                 .get_leader_for_view(self.pacemaker.curr_view + 1);
 
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Sending to next leader: {:?} with msg view: {:?}",
-                next_leader,
-                replica_outbound_msg.view_number
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Sending to next leader: {:?} with msg view: {:?}",
+            //     next_leader,
+            //     replica_outbound_msg.view_number
+            // );
 
             self.rep_node_channel
                 .send_to_node(next_leader, replica_outbound_msg)
@@ -726,22 +726,22 @@ impl HotStuffReplica {
         self.voted_for_curr_view = true;
 
         if self.node_id == next_leader {
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Sending to self as node is next leader"
-            );
+            // replica_debug!(
+            //     self.node_id,
+            //     self.pacemaker.curr_view,
+            //     "Sending to self as node is next leader"
+            // );
             let _ = self.rep_node_channel.send_to_self(outbound_msg).await;
 
             return Ok(());
         }
 
-        replica_debug!(
-            self.node_id,
-            self.pacemaker.curr_view,
-            "Sending to next leader: {:?}",
-            next_leader,
-        );
+        // replica_debug!(
+        //     self.node_id,
+        //     self.pacemaker.curr_view,
+        //     "Sending to next leader: {:?}",
+        //     next_leader,
+        // );
 
         self.rep_node_channel
             .send_to_node(next_leader, outbound_msg)
@@ -806,9 +806,9 @@ impl HotStuffReplica {
 
                         if self.node_id == leader {
                             let _ = self.rep_node_channel.send_to_self(outbound_msg).await;
-                            replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending self");
+                            // replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending self");
                         } else {
-                            replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending to node: {:?} with msg view: {:?}", leader, outbound_msg.view_number);
+                            // replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending to node: {:?} with msg view: {:?}", leader, outbound_msg.view_number);
                             self.rep_node_channel.send_to_node(leader, outbound_msg).await?;
                         }
 

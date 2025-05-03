@@ -43,6 +43,7 @@ enum Priority {
 /// - Memory safety is guaranteed by strict immediate removal of executed transactions, preventing stale references.
 pub struct PriorityMempool {
     length: usize,
+    ready_transactions_length: usize,
     account_queues: HashMap<PublicKeyHash, AccountQueue>,
     /// VecDeque is chosen for fast push/pop from both ends.
     /// - Liquidations and cancels are processed first.
@@ -54,6 +55,7 @@ impl PriorityMempool {
     pub fn new() -> Self {
         PriorityMempool {
             length: 0,
+            ready_transactions_length: 0,
             account_queues: HashMap::new(),
             priority_buckets: Default::default(),
         }
@@ -75,6 +77,7 @@ impl PriorityMempool {
                 if transfer_tx.nonce == expected_nonce {
                     self.priority_buckets[Priority::Other as usize]
                         .push_back((transfer_tx.from.clone(), expected_nonce));
+                    self.ready_transactions_length += 1;
                 }
                 self.length += 1;
                 account.insert(transfer_tx.nonce, txn);
@@ -88,6 +91,7 @@ impl PriorityMempool {
                 match self.account_queues.get_mut(&pk) {
                     Some(account_queue) => {
                         self.length -= 1;
+                        self.ready_transactions_length -= 1;
                         return account_queue.remove(&nonce);
                     }
                     None => return None,
@@ -99,6 +103,10 @@ impl PriorityMempool {
 
     pub fn len(&self) -> usize {
         self.length
+    }
+
+    pub fn ready_transactions_length(&self) -> usize {
+        self.ready_transactions_length
     }
 
     pub fn update_after_execution(&mut self, accounts_nonces: Vec<Option<(PublicKeyHash, Nonce)>>) {
@@ -141,8 +149,9 @@ mod tests {
         let tx = mock_tx(pk, 0);
         mempool.insert(tx, 0);
         assert_eq!(mempool.len(), 1);
+        assert_eq!(mempool.ready_transactions_length(), 1);
         mempool.pop_next();
-        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool.ready_transactions_length(), 0);
     }
 
     #[test]
@@ -152,6 +161,7 @@ mod tests {
 
         let tx = mock_tx(pk, 0);
         mempool.insert(tx.clone(), 0);
+        assert_eq!(mempool.ready_transactions_length(), 1);
         let popped = mempool.pop_next().unwrap();
         assert_eq!(popped.hash, tx.hash);
         assert_eq!(mempool.len(), 0);
@@ -164,9 +174,11 @@ mod tests {
 
         let tx = mock_tx(pk, 1);
         mempool.insert(tx.clone(), 0);
+        assert_eq!(mempool.ready_transactions_length(), 0);
         let popped = mempool.pop_next();
         assert!(popped.is_none());
         assert_eq!(mempool.len(), 1);
+        assert_eq!(mempool.ready_transactions_length(), 0);
     }
 
     #[test]
