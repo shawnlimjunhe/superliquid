@@ -32,6 +32,7 @@ use super::{
 };
 
 pub type ViewNumber = u64;
+const BLOCK_TRANSACTION_LENGTH: usize = 16;
 
 pub struct ReplicaSender {
     pub replica_tx: mpsc::Sender<ReplicaInBound>,
@@ -257,24 +258,9 @@ impl HotStuffReplica {
         extends || newer_qc
     }
 
-    /// Selects a transaction from the mempool and
+    /// Selects a transaction from the mempool
     fn select_transactions(&mut self) -> Vec<SignedTransaction> {
-        // return 1 transaction for now
-        while self.mempool.ready_transactions_length() > 0 {
-            let Some(txn) = self.mempool.pop_next() else {
-                return vec![];
-            };
-            let txn_hash = txn.hash();
-            if self.pending_transactions.contains_key(&txn_hash)
-                || self.committed_transactions.contains_key(&txn_hash)
-            {
-                continue;
-            }
-
-            self.pending_transactions.insert(txn_hash, txn.clone());
-            return vec![txn];
-        }
-        return vec![];
+        self.mempool.pop_next_n(BLOCK_TRANSACTION_LENGTH)
     }
 
     fn leader_create_message(&mut self, new_block: Block) -> HotStuffMessage {
