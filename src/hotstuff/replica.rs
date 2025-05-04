@@ -539,6 +539,10 @@ impl HotStuffReplica {
         let is_valid_sig = { b_star_justify.verify(&self.validator_set, self.quorum_threshold()) };
 
         if is_safe && is_valid_sig {
+            let block_merkle_root = b_star.hash_block_transaction();
+            if block_merkle_root != b_star.merkle_root() {
+                return None;
+            }
             outbound_msg = Some(self.vote_message(&b_star, None));
             self.add_block_transactions_to_pending(&b_star);
             // replica_debug!(

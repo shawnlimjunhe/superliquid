@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, vec};
 
 use crate::types::transaction::{Sha256Hash, SignedTransaction};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha224, Sha256};
 
 use super::{
     crypto::{self, QuorumCertificate},
@@ -17,12 +17,14 @@ pub enum Block {
         transactions: Vec<SignedTransaction>,
         view_number: ViewNumber,
         justify: QuorumCertificate,
+        merkle_root: Sha256Hash,
     },
     Normal {
         parent_id: BlockHash,
         transactions: Vec<SignedTransaction>,
         view_number: ViewNumber,
         justify: QuorumCertificate,
+        merkle_root: Sha256Hash,
         // proposer: PublicKeyString,
         // block_hash: TODO
     },
@@ -44,9 +46,10 @@ impl Block {
     ) -> Self {
         return Self::Normal {
             parent_id: parent.hash(),
-            transactions: transactions,
             view_number,
             justify,
+            merkle_root: Self::hash_transactions(&transactions),
+            transactions: transactions,
         };
     }
 
@@ -79,7 +82,7 @@ impl Block {
         false
     }
 
-    pub fn generate_merkle_root(mut hashes: Vec<[u8; 32]>) -> Sha256Hash {
+    pub fn compute_merkle_root(mut hashes: Vec<[u8; 32]>) -> Sha256Hash {
         if hashes.is_empty() {
             return [0u8; 32];
         }
@@ -117,20 +120,25 @@ impl Block {
         }
 
         let hashes = transactions.iter().map(|tx| tx.hash()).collect::<Vec<_>>();
-        Self::generate_merkle_root(hashes)
+        Self::compute_merkle_root(hashes)
     }
+
+    pub fn hash_block_transaction(&self) -> Sha256Hash {
+        Self::hash_transactions(self.transactions())
+    }
+
     pub fn hash(&self) -> BlockHash {
         match self {
             Self::Genesis { .. } => Sha256::digest(b"GENESIS").into(),
             Self::Normal {
                 parent_id,
-                transactions,
                 view_number,
+                merkle_root,
                 ..
             } => {
                 let hashable = HashableBlock {
                     parent_id: *parent_id,
-                    merkle_root: Self::hash_transactions(transactions),
+                    merkle_root: *merkle_root,
                     view_number: *view_number,
                 };
 
@@ -145,6 +153,11 @@ impl Block {
         transactions
     }
 
+    pub fn merkle_root(&self) -> Sha256Hash {
+        let (Block::Genesis { merkle_root, .. } | Block::Normal { merkle_root, .. }) = self;
+        *merkle_root
+    }
+
     pub fn create_genesis_block() -> (Block, QuorumCertificate) {
         let qc = crypto::QuorumCertificate::create_genesis_qc();
 
@@ -152,6 +165,7 @@ impl Block {
             view_number: 0,
             justify: qc.clone(),
             transactions: vec![],
+            merkle_root: Sha256Hash::default(),
         };
         return (genesis, qc);
     }
@@ -169,14 +183,14 @@ mod tests {
     #[test]
     fn test_empty_hash_list() {
         let hashes = vec![];
-        let root = Block::generate_merkle_root(hashes);
+        let root = Block::compute_merkle_root(hashes);
         assert_eq!(root, [0u8; 32]);
     }
 
     #[test]
     fn test_single_hash() {
         let leaf = hash(b"leaf");
-        let root = Block::generate_merkle_root(vec![leaf]);
+        let root = Block::compute_merkle_root(vec![leaf]);
         assert_eq!(root, leaf);
     }
 
@@ -187,7 +201,7 @@ mod tests {
         let h3 = hash(b"c");
         let h4 = hash(b"d");
 
-        let root = Block::generate_merkle_root(vec![h1, h2, h3, h4]);
+        let root = Block::compute_merkle_root(vec![h1, h2, h3, h4]);
 
         // Manually compute
         let l1: [u8; 32] = Sha256::digest(&[h1, h2].concat()).into();
@@ -203,7 +217,7 @@ mod tests {
         let h2 = hash(b"y");
         let h3 = hash(b"z");
 
-        let root = Block::generate_merkle_root(vec![h1, h2, h3]);
+        let root = Block::compute_merkle_root(vec![h1, h2, h3]);
 
         // After duplication, tree will be built on [h1, h2, h3, h3]
         let l1: [u8; 32] = Sha256::digest(&[h1, h2].concat()).into();
@@ -223,7 +237,7 @@ mod tests {
         let h6 = hash(b"f");
         let h7 = hash(b"g");
 
-        let root = Block::generate_merkle_root(vec![h1, h2, h3, h4, h5, h6, h7]);
+        let root = Block::compute_merkle_root(vec![h1, h2, h3, h4, h5, h6, h7]);
 
         let l1: [u8; 32] = Sha256::digest(&[h1, h2].concat()).into();
         let l2: [u8; 32] = Sha256::digest(&[h3, h4].concat()).into();
@@ -241,8 +255,8 @@ mod tests {
         let h1 = hash(b"1");
         let h2 = hash(b"2");
 
-        let root1 = Block::generate_merkle_root(vec![h1, h2]);
-        let root2 = Block::generate_merkle_root(vec![h2, h1]);
+        let root1 = Block::compute_merkle_root(vec![h1, h2]);
+        let root2 = Block::compute_merkle_root(vec![h2, h1]);
 
         assert_ne!(root1, root2);
     }
