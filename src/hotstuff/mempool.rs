@@ -87,7 +87,7 @@ impl PriorityMempool {
         }
     }
 
-    pub fn pop_next(&mut self) -> Option<SignedTransaction> {
+    pub fn _pop_next(&mut self) -> Option<SignedTransaction> {
         let priorities = [Priority::Liquidation, Priority::Cancel, Priority::Other];
 
         for priority in priorities {
@@ -140,7 +140,7 @@ impl PriorityMempool {
         return result;
     }
 
-    pub fn len(&self) -> usize {
+    pub fn _len(&self) -> usize {
         self.length
     }
 
@@ -188,9 +188,9 @@ mod tests {
 
         let tx = mock_tx(pk, 0);
         mempool.insert(tx, 0);
-        assert_eq!(mempool.len(), 1);
+        assert_eq!(mempool._len(), 1);
         assert_eq!(mempool.ready_transactions_length(), 1);
-        mempool.pop_next();
+        mempool._pop_next();
         assert_eq!(mempool.ready_transactions_length(), 0);
     }
 
@@ -202,9 +202,9 @@ mod tests {
         let tx = mock_tx(pk, 0);
         mempool.insert(tx.clone(), 0);
         assert_eq!(mempool.ready_transactions_length(), 1);
-        let popped = mempool.pop_next().unwrap();
+        let popped = mempool._pop_next().unwrap();
         assert_eq!(popped.hash, tx.hash);
-        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool._len(), 0);
     }
 
     #[test]
@@ -218,13 +218,13 @@ mod tests {
         mempool.insert(tx_1.clone(), 0);
         mempool.insert(tx_2.clone(), 0);
         assert_eq!(mempool.ready_transactions_length(), 2);
-        let popped = mempool.pop_next().unwrap();
+        let popped = mempool._pop_next().unwrap();
         assert_eq!(popped.hash, tx_1.hash);
-        assert_eq!(mempool.len(), 1);
+        assert_eq!(mempool._len(), 1);
 
-        let popped = mempool.pop_next().unwrap();
+        let popped = mempool._pop_next().unwrap();
         assert_eq!(popped.hash, tx_2.hash);
-        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool._len(), 0);
     }
 
     #[test]
@@ -235,9 +235,9 @@ mod tests {
         let tx = mock_tx(pk, 1);
         mempool.insert(tx.clone(), 0);
         assert_eq!(mempool.ready_transactions_length(), 0);
-        let popped = mempool.pop_next();
+        let popped = mempool._pop_next();
         assert!(popped.is_none());
-        assert_eq!(mempool.len(), 1);
+        assert_eq!(mempool._len(), 1);
         assert_eq!(mempool.ready_transactions_length(), 0);
     }
 
@@ -248,7 +248,7 @@ mod tests {
 
         let tx = mock_tx(pk, 0);
         mempool.insert(tx.clone(), 1); // old nonce
-        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool._len(), 0);
     }
 
     #[test]
@@ -262,13 +262,13 @@ mod tests {
         mempool.insert(tx0, 0);
         mempool.insert(tx1.clone(), 0);
 
-        let _ = mempool.pop_next().unwrap();
+        let _ = mempool._pop_next().unwrap();
         // Execute nonce 0
         let next_nonce = Some((pk, 1));
         mempool.update_after_execution(vec![next_nonce]);
 
         // Should now pop tx1
-        let tx = mempool.pop_next().unwrap();
+        let tx = mempool._pop_next().unwrap();
 
         assert_eq!(tx.hash, tx1.hash);
     }
@@ -287,7 +287,7 @@ mod tests {
         let popped = mempool.pop_next_n(2);
         assert_eq!(popped.len(), 1);
         assert_eq!(popped[0].hash, tx0.hash);
-        assert_eq!(mempool.len(), 1);
+        assert_eq!(mempool._len(), 1);
     }
 
     #[test]
@@ -310,7 +310,7 @@ mod tests {
         assert!(popped.iter().any(|tx| tx.hash == tx1.hash));
         assert!(popped.iter().any(|tx| tx.hash == tx2.hash));
         assert!(popped.iter().any(|tx| tx.hash == tx3.hash));
-        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool._len(), 0);
     }
 
     #[test]
@@ -327,7 +327,7 @@ mod tests {
 
         let _ = mempool.pop_next_n(2);
 
-        assert_eq!(mempool.len(), 0);
+        assert_eq!(mempool._len(), 0);
         assert_eq!(mempool.ready_transactions_length(), 0);
     }
 }

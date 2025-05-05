@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, vec};
 
 use crate::types::transaction::{Sha256Hash, SignedTransaction};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha224, Sha256};
+use sha2::{Digest, Sha256};
 
 use super::{
     crypto::{self, QuorumCertificate},

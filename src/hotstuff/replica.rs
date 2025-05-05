@@ -17,7 +17,7 @@ use crate::{
     replica_debug, replica_log,
     state::state::{AccountInfo, LedgerState},
     types::{
-        message::{ReplicaInBound, ReplicaOutbound, mpsc_error},
+        message::{ReplicaInBound, ReplicaOutbound},
         transaction::{PublicKeyHash, Sha256Hash, SignedTransaction, UnsignedTransaction},
     },
 };
@@ -29,40 +29,21 @@ use super::{
     message::HotStuffMessage,
     message_window::MessageWindow,
     pacemaker::Pacemaker,
+    replica_sender::ReplicaSender,
 };
 
 pub type ViewNumber = u64;
 const BLOCK_TRANSACTION_LENGTH: usize = 16;
 
-pub struct ReplicaSender {
-    pub replica_tx: mpsc::Sender<ReplicaInBound>,
-    pub node_tx: mpsc::Sender<ReplicaOutbound>,
+struct ViewProgress {
+    pub leader_has_proposed: bool,
+    pub replica_has_voted: bool,
 }
 
-impl ReplicaSender {
-    pub(super) async fn send_to_self(&self, msg: HotStuffMessage) -> Result<(), std::io::Error> {
-        self.replica_tx
-            .send(ReplicaInBound::HotStuff(msg))
-            .await
-            .map_err(|e| mpsc_error("Send to replica failed", e))
-    }
-
-    pub(super) async fn broadcast(&self, msg: HotStuffMessage) -> Result<(), std::io::Error> {
-        self.node_tx
-            .send(ReplicaOutbound::Broadcast(msg))
-            .await
-            .map_err(|e| mpsc_error("failed to send to node", e))
-    }
-
-    pub(super) async fn send_to_node(
-        &self,
-        node_id: usize,
-        msg: HotStuffMessage,
-    ) -> Result<(), std::io::Error> {
-        self.node_tx
-            .send(ReplicaOutbound::SendTo(node_id, msg))
-            .await
-            .map_err(|e| mpsc_error("failed to send to node", e))
+impl ViewProgress {
+    fn reset(&mut self) {
+        self.leader_has_proposed = false;
+        self.replica_has_voted = false;
     }
 }
 
@@ -89,9 +70,7 @@ pub struct HotStuffReplica {
     blockstore: HashMap<BlockHash, Arc<Block>>,
     ledger_state: LedgerState,
 
-    // view specifc flag: for view idempotency
-    proposed_for_curr_view: bool,
-    voted_for_curr_view: bool,
+    view_progress: ViewProgress,
 }
 
 impl HotStuffReplica {
@@ -131,19 +110,11 @@ impl HotStuffReplica {
 
             ledger_state: LedgerState::new(),
 
-            proposed_for_curr_view: false,
-            voted_for_curr_view: false,
+            view_progress: ViewProgress {
+                leader_has_proposed: false,
+                replica_has_voted: false,
+            },
         }
-    }
-
-    fn reset_view_flags(&mut self) {
-        self.proposed_for_curr_view = false;
-        self.voted_for_curr_view = false;
-    }
-
-    fn advance_view(&mut self) {
-        self.pacemaker.advance_view();
-        self.reset_view_flags();
     }
 
     pub fn get_public_key(&self) -> VerifyingKey {
@@ -466,7 +437,7 @@ impl HotStuffReplica {
                 return None;
             }
 
-            if !self.voted_for_curr_view {
+            if !self.view_progress.replica_has_voted {
                 // Node must vote before attempting to lead the next view, else it's own vote would be missing from the quorum
                 return None;
             }
@@ -490,7 +461,7 @@ impl HotStuffReplica {
             return Some(self.create_new_view());
         }
 
-        if self.voted_for_curr_view {
+        if self.view_progress.replica_has_voted {
             return None;
         }
 
@@ -635,7 +606,7 @@ impl HotStuffReplica {
             //     "Recieved higher view message from node: {:?}",
             //     msg.sender
             // );
-            self.reset_view_flags();
+            self.view_progress.reset();
             // advance view if view is behind
             let is_leader = self.pacemaker.current_leader() == self.node_id;
             if is_leader {
@@ -664,7 +635,7 @@ impl HotStuffReplica {
         // Choose which role-specific handler to run:
         // Every node executes replica logic
         // Leader executes leader logic and sends message to itself to handle as replica
-        if is_leader && !self.proposed_for_curr_view {
+        if is_leader && !self.view_progress.leader_has_proposed {
             let leader_outbound_msg_opt = self.leader_handle_message();
             let Some(leader_outbound_msg) = leader_outbound_msg_opt else {
                 return Ok(());
@@ -673,7 +644,7 @@ impl HotStuffReplica {
             self.rep_node_channel
                 .broadcast(leader_outbound_msg.clone())
                 .await?;
-            self.proposed_for_curr_view = true;
+            self.view_progress.leader_has_proposed = true;
 
             // handle leader's msg as replica
             // Dont send to same channel to prevent data race
@@ -699,7 +670,7 @@ impl HotStuffReplica {
                 .send_to_node(next_leader, replica_outbound_msg)
                 .await?;
 
-            self.voted_for_curr_view = true;
+            self.view_progress.replica_has_voted = true;
 
             return Ok(());
         }
@@ -713,7 +684,7 @@ impl HotStuffReplica {
 
         let next_leader = self.pacemaker.get_leader_for_view(curr_view + 1);
 
-        self.voted_for_curr_view = true;
+        self.view_progress.replica_has_voted = true;
 
         if self.node_id == next_leader {
             // replica_debug!(
@@ -767,6 +738,28 @@ impl HotStuffReplica {
         }
     }
 
+    async fn send_new_view_to_leader(&mut self) -> Result<(), std::io::Error> {
+        let leader = self.pacemaker.current_leader();
+        let outbound_msg = self.create_new_view();
+
+        if self.node_id == leader {
+            self.rep_node_channel.send_to_self(outbound_msg).await
+            // replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending self");
+        } else {
+            // replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending to node: {:?} with msg view: {:?}", leader, outbound_msg.view_number);
+            self.rep_node_channel
+                .send_to_node(leader, outbound_msg)
+                .await
+        }
+    }
+
+    async fn advance_view(&mut self) -> Result<(), std::io::Error> {
+        self.pacemaker.advance_view();
+        self.view_progress.reset();
+        self.send_new_view_to_leader().await?;
+        Ok(())
+    }
+
     pub async fn run_replica(
         &mut self,
         mut to_replica_rx: mpsc::Receiver<ReplicaInBound>,
@@ -789,19 +782,7 @@ impl HotStuffReplica {
 
                 _ = &mut pacemaker_timer => {
                     if self.pacemaker.should_advance_view() {
-
-                        self.advance_view();
-                        let leader = self.pacemaker.current_leader();
-                        let outbound_msg = self.create_new_view();
-
-                        if self.node_id == leader {
-                            let _ = self.rep_node_channel.send_to_self(outbound_msg).await;
-                            // replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending self");
-                        } else {
-                            // replica_debug!(self.node_id, self.pacemaker.curr_view -1 , "Timeout: Sending to node: {:?} with msg view: {:?}", leader, outbound_msg.view_number);
-                            self.rep_node_channel.send_to_node(leader, outbound_msg).await?;
-                        }
-
+                        self.advance_view().await?;
                     }
                 }
             }
