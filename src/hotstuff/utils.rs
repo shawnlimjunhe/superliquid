@@ -9,13 +9,16 @@ use hex::{decode as hex_decode, encode as hex_encode};
 pub fn get_highest_qc_from_votes<'a>(votes: &'a MessageWindow) -> Option<&'a QuorumCertificate> {
     votes
         .iter()
-        .filter_map(|msg| msg.justify.as_ref())
+        .filter_map(|msg| match msg {
+            HotStuffMessage::NewView { justify, .. } => Some(justify),
+            _ => None,
+        })
         .max_by_key(|&qc| qc.view_number)
 }
 
 pub(crate) fn has_quorum_votes_for_view(
     messages: Option<&Vec<HotStuffMessage>>,
-    view: ViewNumber,
+    curr_view: ViewNumber,
     quorum_threhold: usize,
 ) -> bool {
     let Some(msgs) = messages else {
@@ -24,14 +27,14 @@ pub(crate) fn has_quorum_votes_for_view(
 
     return msgs
         .iter()
-        .filter(|m| m.view_number == view && m.partial_sig != None)
+        .filter(|m| matches!(m, HotStuffMessage::Vote { view, .. } if *view == curr_view))
         .count()
         >= quorum_threhold;
 }
 
 pub(crate) fn has_quorum_for_new_view(
     messages: Option<&Vec<HotStuffMessage>>,
-    view: ViewNumber,
+    curr_view: ViewNumber,
     quorum_threhold: usize,
 ) -> bool {
     let Some(msgs) = messages else {
@@ -40,7 +43,7 @@ pub(crate) fn has_quorum_for_new_view(
 
     return msgs
         .iter()
-        .filter(|m| m.view_number == view && m.justify != None)
+        .filter(|m| matches!(m, HotStuffMessage::NewView { view, .. } if *view == curr_view))
         .count()
         >= quorum_threhold;
 }

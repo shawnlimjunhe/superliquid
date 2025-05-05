@@ -53,11 +53,11 @@ impl MessageWindow {
     }
 
     pub fn push(&mut self, msg: HotStuffMessage) -> bool {
-        if msg.view_number < self.lowest_view {
+        if msg.get_view_number() < self.lowest_view {
             return false;
         }
 
-        let index = (msg.view_number - self.lowest_view) as usize;
+        let index = (msg.get_view_number() - self.lowest_view) as usize;
         let opt_vector: Option<&mut Vec<HotStuffMessage>> = self.messages.get_mut(index as usize);
         match opt_vector {
             Some(vector) => {
@@ -123,12 +123,16 @@ impl<'a> Iterator for MessageWindowIter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::node::state::PeerId;
+    use crate::{hotstuff::crypto::QuorumCertificate, node::state::PeerId};
 
     use super::*;
 
+    fn dummy_qc() -> QuorumCertificate {
+        QuorumCertificate::mock(0)
+    }
+
     fn dummy_message(view: ViewNumber, sender: PeerId) -> HotStuffMessage {
-        HotStuffMessage::new(None, None, view, sender, 0)
+        HotStuffMessage::create_new_view(dummy_qc(), view, sender, 0)
     }
 
     #[test]
@@ -169,7 +173,7 @@ mod tests {
         window.prune_before_view(4);
         assert_eq!(window.lowest_view, 4);
         assert_eq!(window.messages.len(), 2); // views 4 and 5
-        assert_eq!(window.messages[0][0].view_number, 4);
+        assert_eq!(window.messages[0][0].get_view_number(), 4);
     }
 
     #[test]

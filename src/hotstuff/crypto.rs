@@ -3,10 +3,20 @@ use std::collections::HashSet;
 use ed25519::Signature;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::types::transaction::Sha256Hash;
 
 use super::{block::BlockHash, hexstring, replica::ViewNumber};
+
+pub type PartialSigHash = Sha256Hash;
+pub type QuorumCertificateHash = Sha256Hash;
+
+#[derive(Serialize)]
+struct HashablePartialSig<'a> {
+    signer_id_bytes: &'a [u8; 32],
+    signature_bytes: &'a [u8],
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PartialSig {
@@ -30,6 +40,27 @@ impl PartialSig {
             signature,
         }
     }
+
+    pub fn hash(&self) -> PartialSigHash {
+        let signer_bytes: &[u8; 32] = &self.signer_id.to_bytes();
+        let sig_bytes: &[u8; 64] = &self.signature.to_bytes();
+
+        let hashable = HashablePartialSig {
+            signer_id_bytes: signer_bytes,
+            signature_bytes: sig_bytes,
+        };
+
+        let encoded = bincode::serialize(&hashable).expect("bincode failed");
+        Sha256::digest(&encoded).into()
+    }
+}
+
+#[derive(Serialize)]
+struct HashableQC {
+    view_number: ViewNumber,
+    block_hash: BlockHash,
+    message_hash: Sha256Hash,
+    sig_hashes: Vec<Sha256Hash>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -108,6 +139,20 @@ impl QuorumCertificate {
         }
 
         valid_sig_count >= quorum_size
+    }
+
+    pub fn hash(&self) -> QuorumCertificateHash {
+        let sig_hashes = self.partial_sigs.iter().map(|sig| sig.hash()).collect();
+
+        let hashable = HashableQC {
+            view_number: self.view_number,
+            block_hash: self.block_hash,
+            message_hash: self.message_hash,
+            sig_hashes,
+        };
+
+        let encoded = bincode::serialize(&hashable).expect("bincode failed");
+        Sha256::digest(&encoded).into()
     }
 }
 

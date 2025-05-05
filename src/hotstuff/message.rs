@@ -1,22 +1,54 @@
 use crate::{node::state::PeerId, types::transaction::Sha256Hash};
+use ed25519::signature::SignerMut;
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
     block::{Block, BlockHash},
-    crypto::{PartialSig, QuorumCertificate},
+    crypto::{PartialSig, QuorumCertificate, QuorumCertificateHash},
     replica::ViewNumber,
 };
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct HotStuffMessage {
-    pub view_number: ViewNumber,
-    pub node: Option<Block>,
-    pub justify: Option<QuorumCertificate>,
-    pub partial_sig: Option<PartialSig>,
+pub struct UnsignedVote<'a> {
+    node: &'a Block,
+    view: ViewNumber,
+}
 
-    pub sender: PeerId,
-    pub sender_view: ViewNumber,
+impl<'a> UnsignedVote<'a> {
+    pub fn hash(&self) -> Sha256Hash {
+        let hashable = HashableMessage {
+            view_number: self.view,
+            block_hash: self.node.hash(),
+            quorum_hash: QuorumCertificateHash::default(),
+        };
+
+        let encoded = bincode::serialize(&hashable).unwrap();
+        Sha256::digest(&encoded).into()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum HotStuffMessage {
+    Proposal {
+        node: Block,
+        view: ViewNumber,
+        sender: PeerId,
+        sender_view: ViewNumber,
+    },
+    Vote {
+        node: Block,
+        partial_sig: PartialSig,
+        view: ViewNumber,
+        sender: PeerId,
+        sender_view: ViewNumber,
+    },
+    NewView {
+        justify: QuorumCertificate,
+        view: ViewNumber,
+        sender: PeerId,
+        sender_view: ViewNumber,
+    },
 }
 
 // Hashable message should only contain these two f
@@ -24,56 +56,106 @@ pub struct HotStuffMessage {
 pub struct HashableMessage {
     view_number: ViewNumber,
     block_hash: BlockHash,
+    quorum_hash: QuorumCertificateHash,
 }
 
 impl HotStuffMessage {
-    pub fn new(
-        node: Option<Block>,
-        option_justify: Option<QuorumCertificate>,
-        curr_view: ViewNumber,
+    pub fn create_new_view(
+        justify: QuorumCertificate,
+        view: ViewNumber,
         sender: PeerId,
         sender_view: ViewNumber,
     ) -> Self {
-        Self {
-            view_number: curr_view,
-            node,
-            justify: option_justify,
-            partial_sig: None,
-
+        Self::NewView {
+            justify,
+            view,
             sender,
             sender_view,
         }
     }
 
-    pub fn new_with_sig(
-        node: Option<Block>,
-        option_qc: Option<QuorumCertificate>,
-        curr_view: ViewNumber,
+    pub fn create_proposal(
+        node: Block,
+        view: ViewNumber,
         sender: PeerId,
         sender_view: ViewNumber,
-        partial_sig: PartialSig,
     ) -> Self {
-        Self {
-            view_number: curr_view,
+        Self::Proposal {
             node,
-            justify: option_qc,
-            partial_sig: Some(partial_sig),
-
+            view,
             sender,
             sender_view,
         }
     }
-    pub fn hash(&self) -> Sha256Hash {
-        let block_hash = match &self.node {
-            Some(block) => block.hash(),
-            None => [0; 32],
+
+    pub fn create_vote(
+        node: Block,
+        view: ViewNumber,
+        sender: PeerId,
+        sender_view: ViewNumber,
+        signing_key: &mut SigningKey,
+    ) -> Self {
+        let unsigned_vote = UnsignedVote { node: &node, view };
+
+        let message_hash = unsigned_vote.hash();
+        let signature = signing_key.sign(&message_hash);
+
+        let partial_sig = PartialSig {
+            signer_id: signing_key.verifying_key(),
+            signature,
         };
-        let hashable = HashableMessage {
-            view_number: self.view_number,
-            block_hash,
+
+        HotStuffMessage::Vote {
+            node,
+            partial_sig: partial_sig,
+            view,
+            sender,
+            sender_view,
+        }
+    }
+
+    pub fn hash(&self) -> Sha256Hash {
+        let hashable = match self {
+            HotStuffMessage::Proposal { node, view, .. } => HashableMessage {
+                view_number: *view,
+                block_hash: node.hash(),
+                quorum_hash: QuorumCertificateHash::default(),
+            },
+            HotStuffMessage::Vote { view, node, .. } => HashableMessage {
+                view_number: *view,
+                block_hash: node.hash(),
+                quorum_hash: QuorumCertificateHash::default(),
+            },
+            HotStuffMessage::NewView { justify, view, .. } => HashableMessage {
+                view_number: *view,
+                block_hash: BlockHash::default(),
+                quorum_hash: justify.hash(),
+            },
         };
 
         let encoded = bincode::serialize(&hashable).unwrap();
         Sha256::digest(&encoded).into()
+    }
+
+    pub fn get_view_number(&self) -> ViewNumber {
+        let (HotStuffMessage::Proposal { view, .. }
+        | HotStuffMessage::Vote { view, .. }
+        | HotStuffMessage::NewView { view, .. }) = self;
+
+        *view
+    }
+
+    pub fn get_sender(&self) -> PeerId {
+        let (HotStuffMessage::Proposal { sender, .. }
+        | HotStuffMessage::Vote { sender, .. }
+        | HotStuffMessage::NewView { sender, .. }) = self;
+        *sender
+    }
+
+    pub fn get_sender_view(&self) -> ViewNumber {
+        let (HotStuffMessage::Proposal { sender_view, .. }
+        | HotStuffMessage::Vote { sender_view, .. }
+        | HotStuffMessage::NewView { sender_view, .. }) = self;
+        *sender_view
     }
 }

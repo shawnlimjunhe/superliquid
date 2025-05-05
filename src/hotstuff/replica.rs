@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use tokio::{
     pin,
     sync::mpsc::{self},
@@ -117,42 +117,22 @@ impl HotStuffReplica {
         }
     }
 
-    pub fn get_public_key(&self) -> VerifyingKey {
-        self.signing_key.verifying_key()
-    }
-
     pub fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.ledger_state.retrieve_by_pk(public_key)
     }
 
-    fn sign(&self, message: &HotStuffMessage) -> PartialSig {
-        let message_hash = message.hash();
-        let signature = self.signing_key.sign(&message_hash);
-
-        PartialSig {
-            signer_id: self.get_public_key(),
-            signature,
-        }
-    }
-
-    pub fn vote_message(
-        &self,
-        node: &Block,
-        option_justify: Option<QuorumCertificate>,
-    ) -> HotStuffMessage {
-        let mut message = HotStuffMessage::new(
-            Some(node.clone()), // need to clone as we are serialising our message
-            option_justify,
+    pub fn vote_message(&mut self, node: &Block) -> HotStuffMessage {
+        HotStuffMessage::create_vote(
+            node.clone(), // need to clone as we are serialising our message
             self.pacemaker.curr_view,
             self.node_id,
             self.pacemaker.curr_view,
-        );
-        message.partial_sig = Some(self.sign(&message));
-        message
+            &mut self.signing_key,
+        )
     }
 
     pub fn matching_message(message: HotStuffMessage, view_number: ViewNumber) -> bool {
-        view_number == message.view_number
+        view_number == message.get_view_number()
     }
 
     fn quorum_threshold(&self) -> usize {
@@ -170,37 +150,40 @@ impl HotStuffReplica {
         let mut seen: HashSet<PublicKeyHash> = HashSet::new();
         let mut tally: HashMap<(BlockHash, Sha256Hash), Vec<&PartialSig>> = HashMap::new();
 
-        for m in msgs {
-            if let Some(sig) = &m.partial_sig {
-                // a) signature must come from a known, unseen validator
-                if !self.validator_set.contains(&sig.signer_id) {
-                    continue;
+        for message in msgs {
+            match message {
+                HotStuffMessage::Vote {
+                    partial_sig, node, ..
+                } => {
+                    // a) signature must come from a known, unseen validator
+                    if !self.validator_set.contains(&partial_sig.signer_id) {
+                        continue;
+                    }
+
+                    let msg_hash = &message.hash();
+
+                    if partial_sig
+                        .signer_id
+                        .verify_strict(msg_hash, &partial_sig.signature)
+                        .is_err()
+                    {
+                        continue;
+                    }
+
+                    if !seen.insert(*partial_sig.signer_id.as_bytes()) {
+                        continue;
+                    }
+
+                    // b) extract the vote’s block hash
+                    let blockhash = node.hash();
+
+                    // ensure that quorum has same msg_hash
+                    tally
+                        .entry((blockhash, *msg_hash))
+                        .or_default()
+                        .push(partial_sig);
                 }
-
-                let msg_hash = &m.hash();
-
-                if sig
-                    .signer_id
-                    .verify_strict(&m.hash(), &sig.signature)
-                    .is_err()
-                {
-                    continue;
-                }
-
-                if !seen.insert(*sig.signer_id.as_bytes()) {
-                    continue;
-                }
-
-                // b) extract the vote’s block hash
-                let bh = m
-                    .justify
-                    .as_ref()
-                    .map(|qc| qc.block_hash) // if votes carry a QC
-                    .or_else(|| m.node.as_ref().map(|b| b.hash()))
-                    .unwrap_or([1; 32]);
-
-                // ensure that quorum has same msg_hash
-                tally.entry((bh, *msg_hash)).or_default().push(sig);
+                _ => {}
             }
         }
 
@@ -235,15 +218,13 @@ impl HotStuffReplica {
     }
 
     fn leader_create_message(&mut self, new_block: Block) -> HotStuffMessage {
-        let outbound_msg = HotStuffMessage::new(
-            Some(new_block),
-            None,
+        let outbound_msg = HotStuffMessage::create_proposal(
+            new_block,
             self.pacemaker.curr_view,
             self.node_id,
             self.pacemaker.curr_view,
         );
-        // let partial_sig = self.sign(&outbound_msg);
-        // outbound_msg.partial_sig = Some(partial_sig);
+
         return outbound_msg;
     }
 
@@ -335,17 +316,19 @@ impl HotStuffReplica {
                 self.pacemaker.curr_view
             );
 
-            // msgs should only contain justify if next-view interupt is triggered
-            match utils::get_highest_qc_from_votes(&self.messages) {
-                Some(high_qc) => {
-                    if high_qc.view_number > self.generic_qc.view_number {
-                        // update generic qc if replica falls behind
-                        self.generic_qc = Arc::new(high_qc.clone());
-                        self.messages.prune_before_view(self.generic_qc.view_number);
+            if self.generic_qc.view_number != curr_view - 1 {
+                // msgs should only contain justify if next-view interupt is triggered
+                match utils::get_highest_qc_from_votes(&self.messages) {
+                    Some(high_qc) => {
+                        if high_qc.view_number > self.generic_qc.view_number {
+                            // update generic qc if replica falls behind
+                            self.generic_qc = Arc::new(high_qc.clone());
+                            self.messages.prune_before_view(self.generic_qc.view_number);
+                        }
                     }
-                }
-                None => {}
-            };
+                    None => {}
+                };
+            }
 
             let parent = {
                 let Some(parent) = self.blockstore.get(&self.generic_qc.block_hash) else {
@@ -420,52 +403,13 @@ impl HotStuffReplica {
         return None;
     }
 
-    pub fn replica_handle_message(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
-        // replica_log!(
-        //     self.node_id,
-        //     "Replica handle message with at view: {:?}",
-        //     self.pacemaker.curr_view
-        // );
-
+    pub fn replica_handle_proposal(
+        &mut self,
+        node: Block,
+        sender: usize,
+    ) -> Option<HotStuffMessage> {
         let curr_view = self.pacemaker.curr_view;
-
-        if msg.partial_sig.is_some() {
-            // Messages that fall in this block are votes sent to the *next* leader
-            // We can try to optimistically advance the view, otherwise we ignore the messages
-
-            if self.node_id != self.pacemaker.get_leader_for_view(curr_view + 1) {
-                return None;
-            }
-
-            if !self.view_progress.replica_has_voted {
-                // Node must vote before attempting to lead the next view, else it's own vote would be missing from the quorum
-                return None;
-            }
-
-            if !utils::has_quorum_votes_for_view(
-                self.messages.get_messages_for_view(curr_view),
-                curr_view,
-                self.quorum_threshold(),
-            ) {
-                return None;
-            }
-
-            replica_debug!(
-                self.node_id,
-                self.pacemaker.curr_view,
-                "Optimistically advancing to new view",
-            );
-            // Advance view early without waiting for pacemaker timeout
-            self.pacemaker.advance_view();
-
-            return Some(self.create_new_view());
-        }
-
-        if self.view_progress.replica_has_voted {
-            return None;
-        }
-
-        if msg.sender != self.pacemaker.get_leader_for_view(self.pacemaker.curr_view) {
+        if sender != self.pacemaker.get_leader_for_view(curr_view) {
             // Ignore messages not from leader of the current view
             // replica_debug!(
             //     self.node_id,
@@ -477,11 +421,7 @@ impl HotStuffReplica {
             return None;
         }
         // b*
-        let Some(b_star) = msg.node.clone() else {
-            // replica_debug!(self.node_id, self.pacemaker.curr_view, "No node in message");
-            return None;
-        };
-        let b_star = Arc::new(b_star);
+        let b_star = Arc::new(node);
         self.blockstore.insert(b_star.hash(), b_star.clone());
 
         // b″ := b*.justify.node
@@ -498,8 +438,6 @@ impl HotStuffReplica {
 
         let b_star_justify = Arc::new(b_star_justify.clone());
 
-        let curr_view = self.pacemaker.curr_view;
-
         let mut outbound_msg = None;
 
         let is_safe = {
@@ -514,7 +452,7 @@ impl HotStuffReplica {
             if block_merkle_root != b_star.merkle_root() {
                 return None;
             }
-            outbound_msg = Some(self.vote_message(&b_star, None));
+            outbound_msg = Some(self.vote_message(&b_star));
             self.add_block_transactions_to_pending(&b_star);
             // replica_debug!(
             //     self.node_id,
@@ -593,8 +531,61 @@ impl HotStuffReplica {
         return outbound_msg;
     }
 
+    pub fn replica_handle_vote(&mut self) -> Option<HotStuffMessage> {
+        let curr_view = self.pacemaker.curr_view;
+        if self.node_id != self.pacemaker.get_leader_for_view(curr_view + 1) {
+            return None;
+        }
+
+        if !self.view_progress.replica_has_voted {
+            // Node must vote before attempting to lead the next view, else it's own vote would be missing from the quorum
+            return None;
+        }
+
+        if !utils::has_quorum_votes_for_view(
+            self.messages.get_messages_for_view(curr_view),
+            curr_view,
+            self.quorum_threshold(),
+        ) {
+            return None;
+        }
+
+        replica_debug!(
+            self.node_id,
+            self.pacemaker.curr_view,
+            "Optimistically advancing to new view",
+        );
+        // Advance view early without waiting for pacemaker timeout
+        self.pacemaker.advance_view();
+
+        return Some(self.create_new_view());
+    }
+
+    pub fn replica_handle_message(&mut self, msg: HotStuffMessage) -> Option<HotStuffMessage> {
+        // replica_log!(
+        //     self.node_id,
+        //     "Replica handle message with at view: {:?}",
+        //     self.pacemaker.curr_view
+        // );
+
+        return match msg {
+            HotStuffMessage::NewView { .. } => {
+                // replica shouldn't handle new view
+                return None;
+            }
+            HotStuffMessage::Proposal { node, sender, .. } => {
+                self.replica_handle_proposal(node, sender)
+            }
+            HotStuffMessage::Vote { .. } => {
+                // Messages that fall in this block are votes sent to the *next* leader
+                // We can try to optimistically advance the view, otherwise we ignore the messages
+                return self.replica_handle_vote();
+            }
+        };
+    }
+
     fn sync_view(&mut self, msg: &HotStuffMessage) -> bool {
-        let incoming_view = msg.view_number;
+        let incoming_view = msg.get_view_number();
         self.pacemaker.fast_forward_view(incoming_view)
     }
 
@@ -616,7 +607,7 @@ impl HotStuffReplica {
             }
         }
 
-        if msg.view_number + 1 < self.pacemaker.curr_view {
+        if msg.get_view_number() + 1 < self.pacemaker.curr_view {
             // replica_debug!(
             //     self.node_id,
             //     self.pacemaker.curr_view,
@@ -711,9 +702,8 @@ impl HotStuffReplica {
     }
 
     fn create_new_view(&mut self) -> HotStuffMessage {
-        HotStuffMessage::new(
-            None,
-            Some((*self.generic_qc).clone()),
+        HotStuffMessage::create_new_view(
+            (*self.generic_qc).clone(),
             self.pacemaker.curr_view - 1,
             self.node_id,
             self.pacemaker.curr_view - 1,
