@@ -7,6 +7,8 @@ use crate::{
     types::transaction::{PublicKeyHash, PublicKeyString, SignedTransaction, UnsignedTransaction},
 };
 
+use super::market::Market;
+
 pub type Balance = u128;
 pub type Nonce = u64;
 
@@ -52,8 +54,14 @@ pub enum ExecError {
     },
 }
 
+pub struct SpotClearingHouse {
+    markets: Vec<Market>,
+}
+
 pub struct LedgerState {
     pub accounts: HashMap<PublicKeyHash, AccountInfo>,
+    pub spot_clearinghouse: (),
+    pub perps_clearinghouse: (),
 }
 
 impl LedgerState {
@@ -62,7 +70,11 @@ impl LedgerState {
         let mut accounts: HashMap<PublicKeyHash, AccountInfo> = HashMap::new();
         accounts.insert(pk.to_bytes(), AccountInfo::create_faucet());
 
-        LedgerState { accounts }
+        LedgerState {
+            accounts,
+            spot_clearinghouse: (),
+            perps_clearinghouse: (),
+        }
     }
 
     pub(crate) fn retrieve_by_pk(&self, public_key: &PublicKeyHash) -> AccountInfo {
