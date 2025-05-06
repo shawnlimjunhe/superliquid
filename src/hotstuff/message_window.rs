@@ -1,5 +1,3 @@
-use std::collections::{VecDeque, vec_deque};
-
 use super::{message::HotStuffMessage, replica::ViewNumber};
 /// MessageWindow maintains recent HotStuff messages in a sliding window indexed by view number.
 ///
@@ -10,8 +8,9 @@ use super::{message::HotStuffMessage, replica::ViewNumber};
 /// - Handle gaps between views without requiring strict continuity.
 ///
 /// # Data Structures
-/// - `VecDeque<Vec<HotStuffMessage>>`:
-///   - Outer `VecDeque` holds messages for consecutive views, starting from `lowest_view`.
+/// - `Vec<Vec<HotStuffMessage>>`:
+///   - Outer `Vec` holds messages for consecutive views, starting from `lowest_view`.
+///     - chosen over vec since most of the time views is small < 5.
 ///   - Inner `Vec<HotStuffMessage>` stores all messages for a specific view.
 ///   - Chosen over `LinkedList` for better memory locality.
 /// - `lowest_view: ViewNumber`:
@@ -19,14 +18,14 @@ use super::{message::HotStuffMessage, replica::ViewNumber};
 ///   - Advances when old views are pruned.
 pub struct MessageWindow {
     // use a vecDeque instead of a linkedlist here for memory locality
-    pub messages: VecDeque<Vec<HotStuffMessage>>,
+    pub messages: Vec<Vec<HotStuffMessage>>,
     lowest_view: ViewNumber,
 }
 
 impl MessageWindow {
     pub fn new(view_number: ViewNumber) -> Self {
         MessageWindow {
-            messages: VecDeque::with_capacity(4), // optimistic 3 phase
+            messages: Vec::with_capacity(4), // optimistic 3 phase
             lowest_view: view_number,
         }
     }
@@ -39,16 +38,15 @@ impl MessageWindow {
 
         if (view as usize) > (self.lowest_view as usize) + self.messages.len() {
             // prune all current messages
-            self.messages = VecDeque::new();
+            self.messages = Vec::new();
             self.lowest_view = view;
             return;
         }
 
         let to_remove = view - self.lowest_view;
 
-        for _ in 0..to_remove {
-            self.messages.pop_front();
-        }
+        self.messages.drain(0..to_remove as usize);
+
         self.lowest_view = view;
     }
 
@@ -66,7 +64,7 @@ impl MessageWindow {
             None => {
                 let vector = vec![msg];
                 while index > self.messages.len() {
-                    self.messages.push_back(vec![]);
+                    self.messages.push(vec![]);
                 }
 
                 self.messages.insert(index as usize, vector);
@@ -98,7 +96,7 @@ impl MessageWindow {
 }
 
 pub struct MessageWindowIter<'a> {
-    outer: vec_deque::Iter<'a, Vec<HotStuffMessage>>,
+    outer: std::slice::Iter<'a, Vec<HotStuffMessage>>,
     inner: Option<std::slice::Iter<'a, HotStuffMessage>>,
 }
 
