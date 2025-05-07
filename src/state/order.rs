@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+pub type OrderId = u64;
+pub type OrderPrice = u64;
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum OrderStatus {
     Open,
     Cancelled,
@@ -17,8 +19,8 @@ pub enum OrderDirection {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Order {
-    pub id: u128,
-    pub price: u64,
+    pub id: OrderId,
+    pub price: OrderPrice,
     pub size: u32,
     pub filled_size: u32,
     pub status: OrderStatus,
