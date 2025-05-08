@@ -128,6 +128,7 @@ impl Market {
             b.partial_cmp(&a).unwrap()
         });
     }
+
     pub fn cancel_bid(&mut self, order: &Order) {
         Self::cancel_order_with_cmp(&mut self.bids_levels, order, |a, b| {
             a.partial_cmp(&b).unwrap()
@@ -139,10 +140,92 @@ impl Market {
             b.partial_cmp(&a).unwrap()
         });
     }
+
+    pub fn execute_order<F>(levels: &mut Vec<Level>, order: Order, mut compare: F)
+    where
+        F: FnMut(OrderPrice, OrderPrice) -> std::cmp::Ordering,
+    {
+        let mut filled_orders: Vec<Order> = vec![];
+        // We can have at most 1 partially filled order for the counter_party
+        let mut counter_partially_filled_order_size: u32 = 0;
+
+        // todo: keep track of executed price;
+
+        let mut remaining = order.size;
+        while !levels.is_empty() {
+            let level = levels.last_mut();
+            let Some(level) = level else {
+                break;
+            };
+
+            match compare(level.price, order.price) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    // Keep track of which index we fully fill to so we can remove them
+                    let mut to_drain_end_index = 0;
+                    for order in level.orders.iter_mut() {
+                        let order_remaining = order.size - order.filled_size;
+                        let filled = remaining.min(order_remaining);
+                        remaining -= filled;
+                        order.filled_size += filled;
+
+                        if filled == order_remaining {
+                            to_drain_end_index += 1;
+                        }
+
+                        if remaining == 0 {
+                            if filled < order_remaining {
+                                counter_partially_filled_order_size = order_remaining - filled;
+                            }
+                            break;
+                        }
+                    }
+
+                    if to_drain_end_index < level.orders.len() {
+                        filled_orders
+                            .append(&mut level.orders.drain(0..to_drain_end_index).collect());
+                        break;
+                    }
+                    // reached the end of the level without fully filling the order
+                    // remove this level from the orderbook
+                    filled_orders.append(&mut level.orders);
+                    levels.pop();
+                }
+                std::cmp::Ordering::Greater => {
+                    // can no longer fill the order
+                    break;
+                }
+            }
+        }
+
+        //
+    }
+
     pub fn add_order(&mut self, order: Order) {
+        let (best_bid, best_ask) = self.get_best_prices();
+
         match order.direction {
-            OrderDirection::Buy => self.add_bid(order),
-            OrderDirection::Sell => self.add_ask(order),
+            OrderDirection::Buy => {
+                if let Some(best_ask) = best_ask {
+                    if best_ask <= order.price {
+                        Self::execute_order(&mut self.asks_levels, order, |a, b| {
+                            a.partial_cmp(&b).unwrap()
+                        });
+                        return;
+                    }
+                }
+                self.add_bid(order)
+            }
+            OrderDirection::Sell => {
+                if let Some(best_bid) = best_bid {
+                    if best_bid >= order.price {
+                        Self::execute_order(&mut self.bids_levels, order, |a, b| {
+                            b.partial_cmp(&a).unwrap()
+                        });
+                        return;
+                    }
+                }
+                self.add_ask(order)
+            }
         }
     }
 
