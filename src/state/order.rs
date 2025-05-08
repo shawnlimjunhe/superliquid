@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::types::transaction::PublicKeyHash;
+
 pub type OrderId = u64;
 pub type OrderPrice = u64;
 
@@ -25,6 +27,7 @@ pub struct Order {
     pub filled_size: u32,
     pub status: OrderStatus,
     pub direction: OrderDirection,
+    pub account: PublicKeyHash,
     // type
     // trigger conditions
     // tp/sl

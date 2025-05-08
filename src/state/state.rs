@@ -7,7 +7,10 @@ use crate::{
     types::transaction::{PublicKeyHash, PublicKeyString, SignedTransaction, UnsignedTransaction},
 };
 
-use super::market::Market;
+use super::{
+    order::Order,
+    spot_market::{MarketId, SpotMarket},
+};
 
 pub type Balance = u128;
 pub type Nonce = u64;
@@ -16,6 +19,8 @@ pub type Nonce = u64;
 pub struct AccountInfo {
     pub balance: Balance,
     pub expected_nonce: Nonce,
+    pub open_orders: Vec<Order>, // sorted by orderId
+    // pub order: Vec<Order>, ignore storing order history for now
     _private: (), // prevent creation of accountinfo outside of this struct
 }
 
@@ -24,6 +29,7 @@ impl AccountInfo {
         Self {
             balance: 0, // Create 100 for now
             expected_nonce: 0,
+            open_orders: vec![],
             _private: (),
         }
     }
@@ -32,6 +38,7 @@ impl AccountInfo {
         Self {
             balance: u128::MAX,
             expected_nonce: 0,
+            open_orders: vec![],
             _private: (),
         }
     }
@@ -54,12 +61,11 @@ pub enum ExecError {
     },
 }
 
-pub struct SpotClearingHouse {
-    markets: Vec<Market>,
-}
+pub type asset_id = u32;
 
 pub struct LedgerState {
     pub accounts: HashMap<PublicKeyHash, AccountInfo>,
+    pub asset_name_map: HashMap<asset_id, String>,
     pub spot_clearinghouse: (),
     pub perps_clearinghouse: (),
 }
@@ -72,6 +78,7 @@ impl LedgerState {
 
         LedgerState {
             accounts,
+            asset_name_map: HashMap::new(),
             spot_clearinghouse: (),
             perps_clearinghouse: (),
         }

@@ -1,6 +1,11 @@
-use crate::state::order::OrderDirection;
+use std::collections::HashMap;
 
-use super::order::{Order, OrderPrice, OrderStatus};
+use crate::{state::order::OrderDirection, types::transaction::PublicKeyHash};
+
+use super::{
+    order::{Order, OrderPrice, OrderStatus},
+    state::asset_id,
+};
 
 pub struct Level {
     pub price: u64,
@@ -9,7 +14,34 @@ pub struct Level {
     pub cancelled: u32,
 }
 
-pub struct Market {
+pub type MarketId = u32;
+
+pub struct AccountBalance {
+    asset_balance: HashMap<asset_id, u64>,
+}
+
+pub struct SpotClearingHouse {
+    next_id: u64,
+    accounts: HashMap<PublicKeyHash, AccountBalance>,
+    markets: Vec<SpotMarket>,
+    asset_to_market_map: HashMap<(asset_id, asset_id), MarketId>,
+}
+
+impl SpotClearingHouse {
+    pub fn new() -> Self {
+        Self {
+            next_id: 0,
+            accounts: HashMap::new(),
+            markets: vec![],
+            asset_to_market_map: HashMap::new(),
+        }
+    }
+}
+
+pub struct SpotMarket {
+    pub market_id: MarketId,
+    pub asset_one: asset_id,
+    pub asset_two: asset_id,
     // pub tick_size: (),
     // pub lot_size: (),
 
@@ -18,7 +50,17 @@ pub struct Market {
     pub asks_levels: Vec<Level>, // 10, 9, 8, ..
 }
 
-impl Market {
+impl SpotMarket {
+    fn new(market_id: MarketId, asset_one: asset_id, asset_two: asset_id) -> Self {
+        Self {
+            market_id,
+            asset_one,
+            asset_two,
+            bids_levels: vec![],
+            asks_levels: vec![],
+        }
+    }
+
     fn add_order_with_cmp<F>(levels: &mut Vec<Level>, order: Order, mut compare: F)
     where
         F: FnMut(OrderPrice, OrderPrice) -> std::cmp::Ordering,
@@ -247,7 +289,10 @@ impl Market {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::order::{Order, OrderDirection, OrderId, OrderStatus};
+    use crate::{
+        state::order::{Order, OrderDirection, OrderId, OrderStatus},
+        types::transaction::PublicKeyHash,
+    };
 
     fn make_order(price: u64, size: u32, direction: OrderDirection, id: OrderId) -> Order {
         Order {
@@ -257,14 +302,18 @@ mod tests {
             id,
             filled_size: 0,
             status: OrderStatus::Open,
+            account: PublicKeyHash::default(),
         }
     }
 
     #[test]
     fn test_add_bid_order_inserts_correctly() {
-        let mut market = Market {
+        let mut market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         market.add_order(make_order(100, 10, OrderDirection::Buy, 1));
@@ -280,9 +329,12 @@ mod tests {
 
     #[test]
     fn test_add_ask_order_inserts_correctly() {
-        let mut market = Market {
+        let mut market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         market.add_order(make_order(110, 8, OrderDirection::Sell, 1));
@@ -301,9 +353,12 @@ mod tests {
 
     #[test]
     fn test_order_aggregation_on_same_price() {
-        let mut market = Market {
+        let mut market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         market.add_order(make_order(100, 10, OrderDirection::Buy, 1));
@@ -315,9 +370,12 @@ mod tests {
 
     #[test]
     fn test_get_best_prices_returns_none_when_empty() {
-        let market = Market {
+        let market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         assert_eq!(market.get_best_prices(), (None, None));
@@ -325,9 +383,12 @@ mod tests {
 
     #[test]
     fn test_cancels_ask_order_correctly() {
-        let mut market = Market {
+        let mut market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         market.add_order(make_order(110, 8, OrderDirection::Sell, 1));
@@ -350,9 +411,12 @@ mod tests {
 
     #[test]
     fn test_cancels_buy_order_correctly() {
-        let mut market = Market {
+        let mut market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         market.add_order(make_order(1, 8, OrderDirection::Buy, 1));
@@ -372,9 +436,12 @@ mod tests {
 
     #[test]
     fn test_prunes_cancelled_orders_correctly() {
-        let mut market = Market {
+        let mut market = SpotMarket {
             bids_levels: vec![],
             asks_levels: vec![],
+            market_id: 0,
+            asset_one: 0,
+            asset_two: 1,
         };
 
         let order_1 = make_order(1, 8, OrderDirection::Buy, 1);
