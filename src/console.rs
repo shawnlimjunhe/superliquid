@@ -1,6 +1,5 @@
 use colored::{self, Colorize};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use futures::future::OrElse;
 use hex::FromHex;
 use rand::rngs::OsRng;
 use std::{
@@ -147,8 +146,11 @@ async fn handle_transfer(
         return Ok(());
     };
 
-    if amount > token_balance.balance {
-        println!("Insufficient balance: {:?}", token_balance.balance);
+    if amount > token_balance.available_balance {
+        println!(
+            "Insufficient balance: Available balance{:?}",
+            token_balance.available_balance
+        );
         return Ok(());
     }
 

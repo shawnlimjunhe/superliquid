@@ -9,10 +9,7 @@ use tokio::{
 use crate::{
     message_protocol::{self, AppMessage, ControlMessage},
     node::{peer::broadcast::broadcast_transaction, state::Node},
-    state::{
-        asset::AssetId,
-        state::{AccountInfo, AccountInfoWithBalances},
-    },
+    state::{asset::AssetId, state::AccountInfoWithBalances},
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
         transaction::{PublicKeyHash, SignedTransaction, TransferTransaction, UnsignedTransaction},

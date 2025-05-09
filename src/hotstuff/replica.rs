@@ -15,7 +15,7 @@ use crate::{
     hotstuff::utils,
     node::client::handler::{ClientResponse, QueryRequest},
     replica_debug, replica_log,
-    state::state::{AccountInfo, LedgerState},
+    state::state::{AccountInfoWithBalances, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound},
         transaction::{PublicKeyHash, Sha256Hash, SignedTransaction, UnsignedTransaction},
@@ -117,8 +117,11 @@ impl HotStuffReplica {
         }
     }
 
-    pub fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
-        self.ledger_state.retrieve_account_info(public_key)
+    pub fn get_account_info_with_balances(
+        &self,
+        public_key: &PublicKeyHash,
+    ) -> AccountInfoWithBalances {
+        self.ledger_state.get_account_info_with_balances(public_key)
     }
 
     pub fn vote_message(&mut self, node: &Block) -> HotStuffMessage {
@@ -712,11 +715,11 @@ impl HotStuffReplica {
 
     fn handle_query(&self, query_request: QueryRequest) {
         let query = query_request.query;
-        let account_info = self.get_account_info(&query.account);
+        let account_info_with_balances = self.get_account_info_with_balances(&query.account);
 
-        let _ = query_request
-            .response_channel
-            .send(ClientResponse { account_info });
+        let _ = query_request.response_channel.send(ClientResponse {
+            account_info_with_balances,
+        });
     }
 
     fn handle_transaction(&mut self, txn: SignedTransaction) {
@@ -724,7 +727,7 @@ impl HotStuffReplica {
             UnsignedTransaction::Transfer(transfer_transaction) => {
                 let account_info = self
                     .ledger_state
-                    .retrieve_account_info(&transfer_transaction.from);
+                    .get_account_info(&transfer_transaction.from);
                 self.mempool.insert(txn, account_info.expected_nonce);
             }
         }

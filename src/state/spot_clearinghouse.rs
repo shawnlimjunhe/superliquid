@@ -15,7 +15,14 @@ type MarketIdCounter = MarketId;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AccountTokenBalance {
     pub asset_id: AssetId,
-    pub balance: u128,
+    pub available_balance: u128, // not used for orders
+    pub total_balance: u128,
+}
+
+impl AccountTokenBalance {
+    pub fn locked_balance(&self) -> u128 {
+        self.total_balance - self.available_balance
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -55,12 +62,14 @@ impl SpotClearingHouse {
         let (pk, _) = config::retrieve_faucet_keys();
         let asset_balance_one = AccountTokenBalance {
             asset_id: 0,
-            balance: u128::MAX,
+            available_balance: u128::MAX,
+            total_balance: u128::MAX,
         };
 
         let asset_balance_two = AccountTokenBalance {
             asset_id: 1,
-            balance: u128::MAX,
+            total_balance: u128::MAX,
+            available_balance: u128::MAX,
         };
 
         self.accounts.insert(
@@ -275,11 +284,12 @@ impl SpotMarket {
     {
         let mut filled_orders: Vec<Order> = vec![];
         // We can have at most 1 partially filled order for the counter_party
-        let mut counter_partially_filled_order_size: u32 = 0;
+        let mut counter_party_partially_filled_order_size: u32 = 0;
 
         // todo: keep track of executed price;
 
         let mut remaining = order.size;
+
         while !levels.is_empty() {
             let level = levels.last_mut();
             let Some(level) = level else {
@@ -302,7 +312,8 @@ impl SpotMarket {
 
                         if remaining == 0 {
                             if filled < order_remaining {
-                                counter_partially_filled_order_size = order_remaining - filled;
+                                counter_party_partially_filled_order_size =
+                                    order_remaining - filled;
                             }
                             break;
                         }
@@ -325,7 +336,9 @@ impl SpotMarket {
             }
         }
 
-        //
+        // Settle executed orders
+        // Deduct amount from party
+        // Transfer amount to counter parties
     }
 
     pub fn add_order(&mut self, order: Order) {

@@ -89,14 +89,24 @@ impl LedgerState {
         }
     }
 
-    pub(crate) fn retrieve_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
+    pub(crate) fn get_account_info_with_balances(
+        &self,
+        public_key: &PublicKeyHash,
+    ) -> AccountInfoWithBalances {
+        let account_info = self.get_account_info(public_key);
+        let spot_balances = self.get_account_spot_balances(public_key);
+
+        AccountInfoWithBalances {
+            account_info,
+            spot_balances,
+        }
+    }
+
+    pub(crate) fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.accounts.get(public_key).cloned().unwrap_or_default()
     }
     // retrieves account info by public key, creates one if one doesn't exist
-    pub(crate) fn retrieve_account_info_mut(
-        &mut self,
-        public_key: &PublicKeyHash,
-    ) -> &mut AccountInfo {
+    pub(crate) fn get_account_info_mut(&mut self, public_key: &PublicKeyHash) -> &mut AccountInfo {
         self.accounts
             .entry(*public_key)
             .or_insert_with(|| AccountInfo::new())
@@ -109,7 +119,7 @@ impl LedgerState {
         self.spot_clearinghouse.get_account_balance_mut(public_key)
     }
 
-    pub(crate) fn get_account_spot_balances(self, public_key: &PublicKeyHash) -> AccountBalance {
+    pub(crate) fn get_account_spot_balances(&self, public_key: &PublicKeyHash) -> AccountBalance {
         self.spot_clearinghouse.get_account_balance(public_key)
     }
 
@@ -124,7 +134,7 @@ impl LedgerState {
                 UnsignedTransaction::Transfer(tx) => {
                     let new_expected_nonce = {
                         {
-                            let from_account_info = self.retrieve_account_info(&tx.from);
+                            let from_account_info = self.get_account_info(&tx.from);
 
                             if from_account_info.expected_nonce < tx.nonce {
                                 println!("Duplicate nonce");
@@ -160,19 +170,19 @@ impl LedgerState {
                                 });
                             };
 
-                            if from_token_balance.balance < tx.amount {
+                            if from_token_balance.available_balance < tx.amount {
                                 println!("Insufficient Funds");
                                 return Err(ExecError::InsufficientFunds {
                                     from: PublicKeyString::from_bytes(tx.from),
-                                    have: from_token_balance.balance,
+                                    have: from_token_balance.total_balance,
                                     need: tx.amount,
                                 });
                             }
-
-                            from_token_balance.balance -= tx.amount;
+                            from_token_balance.available_balance -= tx.amount;
+                            from_token_balance.total_balance -= tx.amount;
                         }
                         {
-                            let from_account_info = self.retrieve_account_info_mut(&tx.from);
+                            let from_account_info = self.get_account_info_mut(&tx.from);
                             from_account_info.expected_nonce += 1;
                             from_account_info.expected_nonce
                         }
@@ -185,12 +195,13 @@ impl LedgerState {
                         .find(|a| a.asset_id == tx.asset_id);
 
                     match to_token_balance_opt {
-                        Some(account_balance) => account_balance.balance += tx.amount,
+                        Some(account_balance) => account_balance.total_balance += tx.amount,
                         None => to_account_balances
                             .asset_balances
                             .push(AccountTokenBalance {
                                 asset_id: tx.asset_id,
-                                balance: tx.amount,
+                                available_balance: tx.amount,
+                                total_balance: tx.amount,
                             }),
                     }
 

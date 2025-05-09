@@ -6,7 +6,7 @@ use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
 use crate::state::asset::AssetId;
-use crate::state::state::{AccountInfo, AccountInfoWithBalances};
+use crate::state::state::AccountInfoWithBalances;
 use crate::types::message::Message;
 use crate::types::transaction::{PublicKeyHash, Sha256Hash, SignedTransaction};
 use std::io::{Error, ErrorKind, Result};
