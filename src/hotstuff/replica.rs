@@ -118,7 +118,7 @@ impl HotStuffReplica {
     }
 
     pub fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
-        self.ledger_state.retrieve_by_pk(public_key)
+        self.ledger_state.retrieve_account_info(public_key)
     }
 
     pub fn vote_message(&mut self, node: &Block) -> HotStuffMessage {
@@ -722,7 +722,9 @@ impl HotStuffReplica {
     fn handle_transaction(&mut self, txn: SignedTransaction) {
         match &txn.tx {
             UnsignedTransaction::Transfer(transfer_transaction) => {
-                let account_info = self.ledger_state.retrieve_by_pk(&transfer_transaction.from);
+                let account_info = self
+                    .ledger_state
+                    .retrieve_account_info(&transfer_transaction.from);
                 self.mempool.insert(txn, account_info.expected_nonce);
             }
         }

@@ -6,7 +6,10 @@ use hex::{FromHex, encode as hex_encode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{hotstuff::utils, state::state::Nonce};
+use crate::{
+    hotstuff::utils,
+    state::{asset::AssetId, state::Nonce},
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UnsignedTransaction {
@@ -18,6 +21,7 @@ pub struct TransferTransaction {
     pub from: PublicKeyHash,
     pub to: PublicKeyHash,
     pub amount: u128,
+    pub asset_id: AssetId,
     pub nonce: Nonce,
 }
 
@@ -204,6 +208,7 @@ mod tests {
             from: vk.to_bytes(),
             to: PublicKeyString::default().to_bytes(),
             amount: 42,
+            asset_id: 0,
             nonce: 0,
         });
 
@@ -222,6 +227,7 @@ mod tests {
             from: vk.to_bytes(),
             to: PublicKeyString::default().to_bytes(),
             amount: 100,
+            asset_id: 0,
             nonce: 0,
         });
 
@@ -324,6 +330,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 123,
+                asset_id: 0,
                 nonce: 0,
             });
             let tx2 = tx1.clone();
@@ -338,6 +345,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 123,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -345,6 +353,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 456,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -367,6 +376,7 @@ mod tests {
                 from: vk2.to_bytes(), // set from wrong key
                 to: PublicKeyString::default().to_bytes(),
                 amount: 100,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -387,6 +397,7 @@ mod tests {
                 from: vk1.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 50,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -394,6 +405,7 @@ mod tests {
                 from: vk2.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 50,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -414,6 +426,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 777,
+                asset_id: 0,
                 nonce: 0,
             });
 

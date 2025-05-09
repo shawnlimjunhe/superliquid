@@ -8,8 +8,9 @@ use crate::{
 };
 
 use super::{
+    asset::AssetManager,
     order::Order,
-    spot_market::{MarketId, SpotMarket},
+    spot_clearinghouse::{AccountBalance, AccountTokenBalance, SpotClearingHouse},
 };
 
 pub type Balance = u128;
@@ -17,17 +18,21 @@ pub type Nonce = u64;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AccountInfo {
-    pub balance: Balance,
     pub expected_nonce: Nonce,
     pub open_orders: Vec<Order>, // sorted by orderId
     // pub order: Vec<Order>, ignore storing order history for now
     _private: (), // prevent creation of accountinfo outside of this struct
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AccountInfoWithBalances {
+    pub account_info: AccountInfo,
+    pub spot_balances: AccountBalance,
+}
+
 impl AccountInfo {
     pub(crate) fn new() -> Self {
         Self {
-            balance: 0, // Create 100 for now
             expected_nonce: 0,
             open_orders: vec![],
             _private: (),
@@ -36,7 +41,6 @@ impl AccountInfo {
 
     fn create_faucet() -> Self {
         Self {
-            balance: u128::MAX,
             expected_nonce: 0,
             open_orders: vec![],
             _private: (),
@@ -61,12 +65,10 @@ pub enum ExecError {
     },
 }
 
-pub type asset_id = u32;
-
 pub struct LedgerState {
     pub accounts: HashMap<PublicKeyHash, AccountInfo>,
-    pub asset_name_map: HashMap<asset_id, String>,
-    pub spot_clearinghouse: (),
+    pub asset_manager: AssetManager,
+    pub spot_clearinghouse: SpotClearingHouse,
     pub perps_clearinghouse: (),
 }
 
@@ -76,23 +78,39 @@ impl LedgerState {
         let mut accounts: HashMap<PublicKeyHash, AccountInfo> = HashMap::new();
         accounts.insert(pk.to_bytes(), AccountInfo::create_faucet());
 
+        let mut spot_clearinghouse = SpotClearingHouse::new();
+        spot_clearinghouse.add_faucet_account();
+
         LedgerState {
             accounts,
-            asset_name_map: HashMap::new(),
-            spot_clearinghouse: (),
+            asset_manager: AssetManager::new(),
+            spot_clearinghouse: spot_clearinghouse,
             perps_clearinghouse: (),
         }
     }
 
-    pub(crate) fn retrieve_by_pk(&self, public_key: &PublicKeyHash) -> AccountInfo {
+    pub(crate) fn retrieve_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.accounts.get(public_key).cloned().unwrap_or_default()
     }
-
     // retrieves account info by public key, creates one if one doesn't exist
-    pub(crate) fn retrieve_by_pk_mut(&mut self, public_key: &PublicKeyHash) -> &mut AccountInfo {
+    pub(crate) fn retrieve_account_info_mut(
+        &mut self,
+        public_key: &PublicKeyHash,
+    ) -> &mut AccountInfo {
         self.accounts
             .entry(*public_key)
-            .or_insert_with(AccountInfo::new)
+            .or_insert_with(|| AccountInfo::new())
+    }
+
+    pub(crate) fn get_account_spot_balances_mut(
+        &mut self,
+        public_key: &PublicKeyHash,
+    ) -> &mut AccountBalance {
+        self.spot_clearinghouse.get_account_balance_mut(public_key)
+    }
+
+    pub(crate) fn get_account_spot_balances(self, public_key: &PublicKeyHash) -> AccountBalance {
+        self.spot_clearinghouse.get_account_balance(public_key)
     }
 
     pub(crate) fn apply(
@@ -104,38 +122,77 @@ impl LedgerState {
         for transaction in transactions.iter() {
             match &transaction.tx {
                 UnsignedTransaction::Transfer(tx) => {
-                    let from_info = self.retrieve_by_pk_mut(&tx.from);
-                    if from_info.balance < tx.amount {
-                        println!("Insufficient Funds");
-                        return Err(ExecError::InsufficientFunds {
-                            from: PublicKeyString::from_bytes(tx.from),
-                            have: from_info.balance,
-                            need: tx.amount,
-                        });
+                    let new_expected_nonce = {
+                        {
+                            let from_account_info = self.retrieve_account_info(&tx.from);
+
+                            if from_account_info.expected_nonce < tx.nonce {
+                                println!("Duplicate nonce");
+                                return Err(ExecError::DuplicateNonce {
+                                    from: PublicKeyString::from_bytes(tx.from),
+                                    nonce: tx.nonce,
+                                });
+                            }
+
+                            if from_account_info.expected_nonce > tx.nonce {
+                                println!("Out of order nonce");
+                                return Err(ExecError::OutOfOrderNonce {
+                                    from: PublicKeyString::from_bytes(tx.from),
+                                    nonce: tx.nonce,
+                                });
+                            }
+                        }
+
+                        {
+                            let from_account_balances =
+                                self.get_account_spot_balances_mut(&tx.from);
+                            let from_token_balance_opt = from_account_balances
+                                .asset_balances
+                                .iter_mut()
+                                .find(|a| a.asset_id == tx.asset_id);
+
+                            let Some(from_token_balance) = from_token_balance_opt else {
+                                println!("Insufficient Funds");
+                                return Err(ExecError::InsufficientFunds {
+                                    from: PublicKeyString::from_bytes(tx.from),
+                                    have: 0,
+                                    need: tx.amount,
+                                });
+                            };
+
+                            if from_token_balance.balance < tx.amount {
+                                println!("Insufficient Funds");
+                                return Err(ExecError::InsufficientFunds {
+                                    from: PublicKeyString::from_bytes(tx.from),
+                                    have: from_token_balance.balance,
+                                    need: tx.amount,
+                                });
+                            }
+
+                            from_token_balance.balance -= tx.amount;
+                        }
+                        {
+                            let from_account_info = self.retrieve_account_info_mut(&tx.from);
+                            from_account_info.expected_nonce += 1;
+                            from_account_info.expected_nonce
+                        }
+                    };
+
+                    let to_account_balances = self.get_account_spot_balances_mut(&tx.to);
+                    let to_token_balance_opt = to_account_balances
+                        .asset_balances
+                        .iter_mut()
+                        .find(|a| a.asset_id == tx.asset_id);
+
+                    match to_token_balance_opt {
+                        Some(account_balance) => account_balance.balance += tx.amount,
+                        None => to_account_balances
+                            .asset_balances
+                            .push(AccountTokenBalance {
+                                asset_id: tx.asset_id,
+                                balance: tx.amount,
+                            }),
                     }
-
-                    if from_info.expected_nonce < tx.nonce {
-                        println!("Duplicate nonce");
-                        return Err(ExecError::DuplicateNonce {
-                            from: PublicKeyString::from_bytes(tx.from),
-                            nonce: tx.nonce,
-                        });
-                    }
-
-                    if from_info.expected_nonce > tx.nonce {
-                        println!("Out of order nonce");
-                        return Err(ExecError::OutOfOrderNonce {
-                            from: PublicKeyString::from_bytes(tx.from),
-                            nonce: tx.nonce,
-                        });
-                    }
-
-                    from_info.balance -= tx.amount;
-                    from_info.expected_nonce += 1;
-                    let new_expected_nonce = from_info.expected_nonce;
-
-                    let to_info = self.retrieve_by_pk_mut(&tx.to);
-                    to_info.balance += tx.amount;
 
                     account_nonces.push(Some((tx.from, new_expected_nonce)));
                 }

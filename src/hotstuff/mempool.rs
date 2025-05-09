@@ -176,6 +176,7 @@ mod tests {
             from: pk,
             to: [2u8; 32],
             amount: 10,
+            asset_id: 0,
             nonce,
         });
         tx.sign(&mut alice_sk)

@@ -1,11 +1,122 @@
 use std::collections::HashMap;
 
-use crate::{state::order::OrderDirection, types::transaction::PublicKeyHash};
+use serde::{Deserialize, Serialize};
+
+use crate::{config, state::order::OrderDirection, types::transaction::PublicKeyHash};
 
 use super::{
+    asset::AssetId,
     order::{Order, OrderPrice, OrderStatus},
-    state::asset_id,
 };
+
+pub type MarketId = u32;
+type MarketIdCounter = MarketId;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AccountTokenBalance {
+    pub asset_id: AssetId,
+    pub balance: u128,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AccountBalance {
+    pub asset_balances: Vec<AccountTokenBalance>,
+}
+
+impl AccountBalance {
+    pub fn new() -> Self {
+        Self {
+            asset_balances: vec![],
+        }
+    }
+}
+
+pub struct SpotClearingHouse {
+    next_id: MarketIdCounter,
+    accounts: HashMap<PublicKeyHash, AccountBalance>,
+    markets: Vec<SpotMarket>,
+    asset_to_market_map: HashMap<(AssetId, AssetId), MarketId>,
+}
+
+impl SpotClearingHouse {
+    pub fn new() -> Self {
+        let clearing_house = Self {
+            next_id: 0,
+            accounts: HashMap::new(),
+            markets: vec![],
+            asset_to_market_map: HashMap::new(),
+        };
+
+        clearing_house
+    }
+
+    /// Create faucet account with max balance for token 0 and 1
+    pub fn add_faucet_account(&mut self) {
+        let (pk, _) = config::retrieve_faucet_keys();
+        let asset_balance_one = AccountTokenBalance {
+            asset_id: 0,
+            balance: u128::MAX,
+        };
+
+        let asset_balance_two = AccountTokenBalance {
+            asset_id: 1,
+            balance: u128::MAX,
+        };
+
+        self.accounts.insert(
+            pk.to_bytes(),
+            AccountBalance {
+                asset_balances: vec![asset_balance_one, asset_balance_two],
+            },
+        );
+    }
+
+    pub fn get_account_balance(&self, public_key: &PublicKeyHash) -> AccountBalance {
+        self.accounts.get(public_key).cloned().unwrap_or_default()
+    }
+
+    pub fn get_account_balance_mut(&mut self, public_key: &PublicKeyHash) -> &mut AccountBalance {
+        self.accounts
+            .entry(*public_key)
+            .or_insert_with(|| AccountBalance::new())
+    }
+
+    fn normalise_pair(asset_one: AssetId, asset_two: AssetId) -> (AssetId, AssetId) {
+        if asset_one < asset_two {
+            (asset_one, asset_two)
+        } else {
+            (asset_two, asset_one)
+        }
+    }
+
+    pub fn get_market_id_from_pair(
+        &self,
+        asset_one: AssetId,
+        asset_two: AssetId,
+    ) -> Option<MarketId> {
+        let pair = Self::normalise_pair(asset_one, asset_two);
+        self.asset_to_market_map.get(&pair).copied()
+    }
+
+    fn create_new_market(&mut self, normalised_pair: (AssetId, AssetId)) -> MarketId {
+        let market_id = self.next_id;
+        let market = SpotMarket::new(market_id, normalised_pair.0, normalised_pair.1);
+        self.markets.push(market);
+        self.asset_to_market_map.insert(normalised_pair, market_id);
+        self.next_id += 1;
+        market_id
+    }
+
+    pub fn add_market(&mut self, asset_one: AssetId, asset_two: AssetId) -> MarketId {
+        if let Some(market_id) = self.get_market_id_from_pair(asset_one, asset_two) {
+            return market_id;
+        }
+
+        let normalised_pair = Self::normalise_pair(asset_one, asset_two);
+
+        self.create_new_market(normalised_pair)
+    }
+}
 
 pub struct Level {
     pub price: u64,
@@ -13,35 +124,10 @@ pub struct Level {
     pub orders: Vec<Order>,
     pub cancelled: u32,
 }
-
-pub type MarketId = u32;
-
-pub struct AccountBalance {
-    asset_balance: HashMap<asset_id, u64>,
-}
-
-pub struct SpotClearingHouse {
-    next_id: u64,
-    accounts: HashMap<PublicKeyHash, AccountBalance>,
-    markets: Vec<SpotMarket>,
-    asset_to_market_map: HashMap<(asset_id, asset_id), MarketId>,
-}
-
-impl SpotClearingHouse {
-    pub fn new() -> Self {
-        Self {
-            next_id: 0,
-            accounts: HashMap::new(),
-            markets: vec![],
-            asset_to_market_map: HashMap::new(),
-        }
-    }
-}
-
 pub struct SpotMarket {
     pub market_id: MarketId,
-    pub asset_one: asset_id,
-    pub asset_two: asset_id,
+    pub asset_one: AssetId,
+    pub asset_two: AssetId,
     // pub tick_size: (),
     // pub lot_size: (),
 
@@ -51,7 +137,7 @@ pub struct SpotMarket {
 }
 
 impl SpotMarket {
-    fn new(market_id: MarketId, asset_one: asset_id, asset_two: asset_id) -> Self {
+    fn new(market_id: MarketId, asset_one: AssetId, asset_two: AssetId) -> Self {
         Self {
             market_id,
             asset_one,
