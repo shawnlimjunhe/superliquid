@@ -278,16 +278,21 @@ impl SpotMarket {
         });
     }
 
-    pub fn execute_order<F>(levels: &mut Vec<Level>, order: Order, mut compare: F)
-    where
+    pub fn execute_order<F>(
+        levels: &mut Vec<Level>,
+        order: Order,
+        asset_to_give: AssetId,
+        asset_to_recieve: AssetId,
+        mut compare: F,
+    ) where
         F: FnMut(OrderPrice, OrderPrice) -> std::cmp::Ordering,
     {
         let mut filled_orders: Vec<Order> = vec![];
         // We can have at most 1 partially filled order for the counter_party
         let mut counter_party_partially_filled_order_size: u32 = 0;
+        let mut amount_to_give: u64 = 0;
 
         // todo: keep track of executed price;
-
         let mut remaining = order.size;
 
         while !levels.is_empty() {
@@ -300,11 +305,13 @@ impl SpotMarket {
                 std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                     // Keep track of which index we fully fill to so we can remove them
                     let mut to_drain_end_index = 0;
+                    let level_price = level.price;
                     for order in level.orders.iter_mut() {
                         let order_remaining = order.size - order.filled_size;
                         let filled = remaining.min(order_remaining);
                         remaining -= filled;
                         order.filled_size += filled;
+                        amount_to_give += (filled as u64) * level_price;
 
                         if filled == order_remaining {
                             to_drain_end_index += 1;
@@ -337,6 +344,8 @@ impl SpotMarket {
         }
 
         // Settle executed orders
+        let to_give_balance =
+
         // Deduct amount from party
         // Transfer amount to counter parties
     }
