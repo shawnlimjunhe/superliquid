@@ -8,12 +8,18 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     hotstuff::utils,
-    state::{asset::AssetId, state::Nonce},
+    state::{
+        asset::AssetId,
+        order::{OrderDirection, OrderType},
+        spot_clearinghouse::MarketId,
+        state::Nonce,
+    },
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UnsignedTransaction {
     Transfer(TransferTransaction),
+    Order(OrderTransaction),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -22,6 +28,17 @@ pub struct TransferTransaction {
     pub to: PublicKeyHash,
     pub amount: u128,
     pub asset_id: AssetId,
+    pub nonce: Nonce,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OrderTransaction {
+    pub from: PublicKeyHash,
+    pub market_id: MarketId,
+    pub direction: OrderDirection,
+    pub order_type: OrderType,
+    pub order_size: u64,
+
     pub nonce: Nonce,
 }
 
@@ -74,6 +91,22 @@ impl SignedTransaction {
                     .expect("Conversion from string to signature failed");
                 public_key.verify_strict(&tx_hash, &signature).is_ok()
             }
+
+            UnsignedTransaction::Order(order_transaction) => {
+                let public_key =
+                    PublicKeyString::from_bytes(order_transaction.from).as_public_key();
+                let tx_hash = self.hash();
+                let signature = utils::string_to_sig(&self.signature.as_str())
+                    .expect("Conversion from string to signature failed");
+                public_key.verify_strict(&tx_hash, &signature).is_ok()
+            }
+        }
+    }
+
+    pub fn get_from_account(&self) -> PublicKeyHash {
+        match &self.tx {
+            UnsignedTransaction::Transfer(transfer_transaction) => transfer_transaction.from,
+            UnsignedTransaction::Order(order_transaction) => order_transaction.from,
         }
     }
 }

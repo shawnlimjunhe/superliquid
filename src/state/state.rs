@@ -1,15 +1,20 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, vec};
 
 use crate::{
     config,
     hotstuff::block::Block,
-    types::transaction::{PublicKeyHash, PublicKeyString, SignedTransaction, UnsignedTransaction},
+    types::transaction::{
+        OrderTransaction, PublicKeyHash, PublicKeyString, SignedTransaction, UnsignedTransaction,
+    },
 };
 
 use super::{
     asset::AssetManager,
-    order::Order,
+    order::{
+        self, CounterPartyPartialFill, ExecutionResults, LimitOrder, MarketOrder, Order, OrderId,
+        OrderStateManager, OrderStatus,
+    },
     spot_clearinghouse::{AccountBalance, AccountTokenBalance, SpotClearingHouse},
 };
 
@@ -19,9 +24,9 @@ pub type Nonce = u64;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AccountInfo {
     pub expected_nonce: Nonce,
-    pub open_orders: Vec<Order>, // sorted by orderId
-    // pub order: Vec<Order>, ignore storing order history for now
-    _private: (), // prevent creation of accountinfo outside of this struct
+    pub open_orders: Vec<LimitOrder>, // sorted by orderId
+    pub completed_orders: Vec<Order>, // sorted by completion
+    _private: (),                     // prevent creation of accountinfo outside of this struct
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -35,6 +40,7 @@ impl AccountInfo {
         Self {
             expected_nonce: 0,
             open_orders: vec![],
+            completed_orders: vec![],
             _private: (),
         }
     }
@@ -43,6 +49,7 @@ impl AccountInfo {
         Self {
             expected_nonce: 0,
             open_orders: vec![],
+            completed_orders: vec![],
             _private: (),
         }
     }
@@ -68,6 +75,7 @@ pub enum ExecError {
 pub struct LedgerState {
     pub accounts: HashMap<PublicKeyHash, AccountInfo>,
     pub asset_manager: AssetManager,
+    pub order_manager: OrderStateManager,
     pub spot_clearinghouse: SpotClearingHouse,
     pub perps_clearinghouse: (),
 }
@@ -84,6 +92,7 @@ impl LedgerState {
         LedgerState {
             accounts,
             asset_manager: AssetManager::new(),
+            order_manager: OrderStateManager::new(),
             spot_clearinghouse: spot_clearinghouse,
             perps_clearinghouse: (),
         }
@@ -123,6 +132,189 @@ impl LedgerState {
         self.spot_clearinghouse.get_account_balance(public_key)
     }
 
+    fn get_order_position_from_open_orders(
+        account_info: &mut AccountInfo,
+        order_id: OrderId,
+    ) -> Option<usize> {
+        account_info
+            .open_orders
+            .iter()
+            .position(|order| order.common.id == order_id)
+    }
+
+    pub(crate) fn handle_order_transaction(
+        &mut self,
+        transaction: OrderTransaction,
+    ) -> Option<(PublicKeyHash, Nonce)> {
+        let OrderTransaction {
+            market_id,
+            from: user_account,
+            direction,
+            order_size,
+            order_type,
+            nonce,
+        } = transaction;
+        // check nonce
+        let from_account_info = self.get_account_info(&user_account);
+        if nonce < from_account_info.expected_nonce {
+            println!("Duplicate nonce");
+            return None;
+            // Err(ExecError::DuplicateNonce {
+            //     from: PublicKeyString::from_bytes(user_account),
+            //     nonce,
+            // });
+        }
+
+        if nonce > from_account_info.expected_nonce {
+            println!("Out of order nonce");
+            return None;
+            // return Err(ExecError::OutOfOrderNonce {
+            //     from: PublicKeyString::from_bytes(user_account),
+            //     nonce,
+            // });
+        }
+
+        let order = match order_type {
+            order::OrderType::Limit(price) => {
+                let order = self.order_manager.new_limit_order(
+                    market_id,
+                    user_account,
+                    direction,
+                    price,
+                    transaction.order_size,
+                );
+                let account_info = self.get_account_info_mut(&user_account);
+                account_info.open_orders.push(order.clone());
+                Order::Limit(order)
+            }
+            order::OrderType::Market => {
+                let order = self.order_manager.new_market_order(
+                    market_id,
+                    user_account,
+                    direction,
+                    order_size,
+                );
+
+                Order::Market(order)
+            }
+        };
+
+        let result = self.spot_clearinghouse.handle_order(order.clone());
+
+        // Update changes to respective account infos
+        match result {
+            Some(result) => {
+                let ExecutionResults {
+                    filled_orders,
+                    counterparty_partial_fill,
+                    user_order_change,
+                } = result;
+
+                match user_order_change {
+                    Some(order_change) => match order_change {
+                        order::OrderChange::LimitOrderChange {
+                            order_id,
+                            filled_amount,
+                            average_execution_price: _,
+                        } => {
+                            let account_info = self.get_account_info_mut(&user_account);
+                            let limit_order_index =
+                                Self::get_order_position_from_open_orders(account_info, order_id)
+                                    .expect("No open order with order_id");
+
+                            let limit_order = account_info
+                                .open_orders
+                                .get_mut(limit_order_index)
+                                .expect("No open order with order_id");
+
+                            let remaining_size =
+                                limit_order.quote_size - limit_order.filled_quote_size;
+
+                            if filled_amount < remaining_size {
+                                limit_order.common.status = OrderStatus::PartiallyFilled;
+                            } else {
+                                // fulled filled
+                                limit_order.common.status = OrderStatus::Filled;
+                                let limit_order =
+                                    account_info.open_orders.remove(limit_order_index);
+                                account_info
+                                    .completed_orders
+                                    .push(Order::Limit(limit_order));
+                            }
+                        }
+                        order::OrderChange::MarketOrderChange {
+                            order_id: _,
+                            filled_amount,
+                            average_execution_price,
+                        } => match order {
+                            Order::Market(MarketOrder::Buy(mut order)) => {
+                                if order.base_size < filled_amount {
+                                    order.common.status = OrderStatus::PartiallyFilled;
+                                }
+                                order.filled_size = filled_amount;
+                                order.average_execution_price = average_execution_price;
+
+                                let account_info = self.get_account_info_mut(&order.common.account);
+
+                                account_info
+                                    .completed_orders
+                                    .push(Order::Market(MarketOrder::Buy(order)));
+                            }
+                            _ => {}
+                        },
+                    },
+                    None => {}
+                }
+
+                // Update filled orders
+                for filled_order in filled_orders.iter() {
+                    let order_account = self.get_account_info_mut(&filled_order.common.account);
+
+                    let removed = Self::get_order_position_from_open_orders(
+                        order_account,
+                        filled_order.common.id,
+                    )
+                    .map(|i| order_account.open_orders.remove(i));
+
+                    let Some(mut removed) = removed else {
+                        continue;
+                    };
+
+                    removed.common.status = OrderStatus::Filled;
+                    order_account.completed_orders.push(Order::Limit(removed));
+                }
+
+                match counterparty_partial_fill {
+                    Some(partial_fill) => {
+                        let CounterPartyPartialFill {
+                            order_id,
+                            account_public_key,
+                            filled_quote_amount,
+                            ..
+                        } = partial_fill;
+
+                        let order_account = self.get_account_info_mut(&account_public_key);
+                        let order = order_account
+                            .open_orders
+                            .iter_mut()
+                            .find(|order| order.common.id == order_id)
+                            .expect("Cant find open order with order id");
+                        order.filled_quote_size += filled_quote_amount;
+                    }
+                    None => {
+                        // do nothing
+                    }
+                }
+            }
+            None => {
+                // do nothing
+            }
+        }
+        let account = self.get_account_info_mut(&user_account);
+        account.expected_nonce += 1;
+        return Some((user_account, account.expected_nonce));
+    }
+
     pub(crate) fn apply(
         &mut self,
         transactions: &Vec<SignedTransaction>,
@@ -136,7 +328,7 @@ impl LedgerState {
                         {
                             let from_account_info = self.get_account_info(&tx.from);
 
-                            if from_account_info.expected_nonce < tx.nonce {
+                            if tx.nonce < from_account_info.expected_nonce {
                                 println!("Duplicate nonce");
                                 return Err(ExecError::DuplicateNonce {
                                     from: PublicKeyString::from_bytes(tx.from),
@@ -144,7 +336,7 @@ impl LedgerState {
                                 });
                             }
 
-                            if from_account_info.expected_nonce > tx.nonce {
+                            if tx.nonce > from_account_info.expected_nonce {
                                 println!("Out of order nonce");
                                 return Err(ExecError::OutOfOrderNonce {
                                     from: PublicKeyString::from_bytes(tx.from),
@@ -206,6 +398,9 @@ impl LedgerState {
                     }
 
                     account_nonces.push(Some((tx.from, new_expected_nonce)));
+                }
+                UnsignedTransaction::Order(order_transaction) => {
+                    account_nonces.push(self.handle_order_transaction(order_transaction.clone()))
                 }
             }
         }

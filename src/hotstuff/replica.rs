@@ -262,12 +262,8 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         for transaction in transactions.iter() {
-            match transaction.tx {
-                UnsignedTransaction::Transfer(_) => {
-                    self.pending_transactions
-                        .insert(transaction.hash, transaction.clone());
-                }
-            }
+            self.pending_transactions
+                .insert(transaction.hash, transaction.clone());
         }
     }
 
@@ -275,12 +271,8 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         for transaction in transactions.iter() {
-            match transaction.tx {
-                UnsignedTransaction::Transfer(_) => {
-                    self.committed_transactions
-                        .insert(transaction.hash, transaction.clone());
-                }
-            }
+            self.committed_transactions
+                .insert(transaction.hash, transaction.clone());
         }
     }
 
@@ -288,11 +280,7 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         for transaction in transactions.iter() {
-            match transaction.tx {
-                UnsignedTransaction::Transfer(_) => {
-                    self.pending_transactions.remove_entry(&transaction.hash)
-                }
-            };
+            self.pending_transactions.remove_entry(&transaction.hash);
         }
     }
 
@@ -723,14 +711,8 @@ impl HotStuffReplica {
     }
 
     fn handle_transaction(&mut self, txn: SignedTransaction) {
-        match &txn.tx {
-            UnsignedTransaction::Transfer(transfer_transaction) => {
-                let account_info = self
-                    .ledger_state
-                    .get_account_info(&transfer_transaction.from);
-                self.mempool.insert(txn, account_info.expected_nonce);
-            }
-        }
+        let account_info = self.ledger_state.get_account_info(&txn.get_from_account());
+        self.mempool.insert(txn, account_info.expected_nonce);
     }
 
     async fn send_new_view_to_leader(&mut self) -> Result<(), std::io::Error> {

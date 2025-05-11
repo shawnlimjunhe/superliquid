@@ -153,6 +153,11 @@ impl Block {
         transactions
     }
 
+    pub fn transactions_mut(&mut self) -> &mut Vec<SignedTransaction> {
+        let (Block::Genesis { transactions, .. } | Block::Normal { transactions, .. }) = self;
+        transactions
+    }
+
     pub fn merkle_root(&self) -> Sha256Hash {
         let (Block::Genesis { merkle_root, .. } | Block::Normal { merkle_root, .. }) = self;
         *merkle_root
