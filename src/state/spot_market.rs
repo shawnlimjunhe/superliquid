@@ -7,6 +7,7 @@ use super::{
     spot_clearinghouse::{MarketId, base_to_quote, quote_to_base},
 };
 
+#[derive(Debug)]
 pub struct Level {
     pub price: u64,
     pub volume: u64,
@@ -198,11 +199,19 @@ impl SpotMarket {
             };
 
             let level_price = level.price;
+            let level_filled = remaining_quote_amount;
+            let mut cancelled_seen = 0;
+
             match compare(order_price, level_price) {
-                std::cmp::Ordering::Less => {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                     // fill the current level orders
                     let mut to_drain_end_index = 0;
                     for order in level.orders.iter_mut() {
+                        if order.common.status == OrderStatus::Cancelled {
+                            cancelled_seen += 1;
+                            continue;
+                        }
+
                         let order_remaining = order.quote_size - order.filled_quote_size;
                         let curr_filled_quote_amount = remaining_quote_amount.min(order_remaining);
                         remaining_quote_amount -= curr_filled_quote_amount;
@@ -237,6 +246,8 @@ impl SpotMarket {
                     if to_drain_end_index < level.orders.len() {
                         filled_orders
                             .append(&mut level.orders.drain(0..to_drain_end_index).collect());
+                        level.volume -= level_filled;
+                        level.cancelled -= cancelled_seen;
                         break;
                     }
                     // reached the end of the level without fully filling the order
@@ -281,9 +292,17 @@ impl SpotMarket {
                 break;
             };
 
-            let mut to_drain_end_index = 0;
+            let level_filled = quote_amount_in;
             let level_price = level.price;
+            let mut level_cancelled = 0;
+
+            let mut to_drain_end_index = 0;
             for order in level.orders.iter_mut() {
+                if order.common.status == OrderStatus::Cancelled {
+                    level_cancelled += 1;
+                    continue;
+                }
+
                 let order_quote_remaining = order.quote_size - order.filled_quote_size;
                 let order_base_remaining = quote_to_base(order_quote_remaining, level_price);
 
@@ -316,6 +335,8 @@ impl SpotMarket {
 
             if to_drain_end_index < level.orders.len() {
                 filled_orders.append(&mut level.orders.drain(0..to_drain_end_index).collect());
+                level.volume -= level_filled;
+                level.cancelled -= level_cancelled;
                 break;
             }
             // reached the end of the level without fully filling the order
@@ -353,9 +374,15 @@ impl SpotMarket {
                 break;
             };
             let level_price = level.price;
+            let level_filled = remaining_quote_amount;
+            let mut cancelled_seen = 0;
 
             let mut to_drain_end_index = 0;
             for order in level.orders.iter_mut() {
+                if order.common.status == OrderStatus::Cancelled {
+                    cancelled_seen += 1;
+                    continue;
+                }
                 let order_remaining = order.quote_size - order.filled_quote_size;
                 let filled_quote_amount = remaining_quote_amount.min(order_remaining);
                 remaining_quote_amount -= filled_quote_amount;
@@ -384,6 +411,8 @@ impl SpotMarket {
 
             if to_drain_end_index < level.orders.len() {
                 filled_orders.append(&mut level.orders.drain(0..to_drain_end_index).collect());
+                level.volume -= level_filled;
+                level.cancelled -= cancelled_seen;
                 break;
             }
             // reached the end of the level without fully filling the order
@@ -428,7 +457,7 @@ impl SpotMarket {
                     return None;
                 };
 
-                if best_ask_price < order.price {
+                if best_ask_price <= order.price {
                     // Attempt to execute order at a better price
 
                     let result = Self::execute_limit(
@@ -458,7 +487,7 @@ impl SpotMarket {
                     return None;
                 };
 
-                if best_bid_price > order.price {
+                if best_bid_price >= order.price {
                     // Attempt to execute order at a better price
                     let result = Self::execute_limit(
                         &mut self.bids_levels,
@@ -554,201 +583,248 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_add_bid_order_inserts_correctly() {
-        let mut market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
+    mod test_limit_orders {
+        use crate::state::{
+            order::{OrderDirection, OrderStatus},
+            spot_market::{SpotMarket, tests::make_order},
         };
 
-        market.add_limit_order_helper(make_order(100, 10, OrderDirection::Buy, 1));
-        market.add_limit_order_helper(make_order(105, 5, OrderDirection::Buy, 2));
-        market.add_limit_order_helper(make_order(103, 7, OrderDirection::Buy, 3));
-        market.add_limit_order_helper(make_order(1, 7, OrderDirection::Buy, 4));
+        #[test]
+        fn test_add_bid_order_inserts_correctly() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-        assert_eq!(market.bids_levels.len(), 4);
-        assert_eq!(market.bids_levels.last().unwrap().price, 105);
-        assert_eq!(market.bids_levels.first().unwrap().price, 1);
-        assert_eq!(market.get_best_prices().0, Some(105));
-    }
+            market.add_limit_order_helper(make_order(100, 10, OrderDirection::Buy, 1));
+            market.add_limit_order_helper(make_order(105, 5, OrderDirection::Buy, 2));
+            market.add_limit_order_helper(make_order(103, 7, OrderDirection::Buy, 3));
+            market.add_limit_order_helper(make_order(1, 7, OrderDirection::Buy, 4));
 
-    #[test]
-    fn test_add_ask_order_inserts_correctly() {
-        let mut market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
-        };
+            assert_eq!(market.bids_levels.len(), 4);
+            assert_eq!(market.bids_levels.last().unwrap().price, 105);
+            assert_eq!(market.bids_levels.first().unwrap().price, 1);
+            assert_eq!(market.get_best_prices().0, Some(105));
+        }
 
-        market.add_limit_order_helper(make_order(110, 8, OrderDirection::Sell, 1));
-        market.add_limit_order_helper(make_order(1000, 8, OrderDirection::Sell, 2));
-        market.add_limit_order_helper(make_order(1000, 10, OrderDirection::Sell, 5));
-        market.add_limit_order_helper(make_order(107, 6, OrderDirection::Sell, 3));
-        market.add_limit_order_helper(make_order(109, 4, OrderDirection::Sell, 4));
+        #[test]
+        fn test_add_ask_order_inserts_correctly() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-        assert_eq!(market.asks_levels.len(), 4);
-        assert_eq!(market.asks_levels.last().unwrap().price, 107);
-        assert_eq!(market.asks_levels.first().unwrap().price, 1000);
-        assert_eq!(market.get_best_prices().1, Some(107));
+            market.add_limit_order_helper(make_order(110, 8, OrderDirection::Sell, 1));
+            market.add_limit_order_helper(make_order(1000, 8, OrderDirection::Sell, 2));
+            market.add_limit_order_helper(make_order(1000, 10, OrderDirection::Sell, 5));
+            market.add_limit_order_helper(make_order(107, 6, OrderDirection::Sell, 3));
+            market.add_limit_order_helper(make_order(109, 4, OrderDirection::Sell, 4));
 
-        assert_eq!(market.asks_levels[0].volume, 18); // price 1000
-    }
+            assert_eq!(market.asks_levels.len(), 4);
+            assert_eq!(market.asks_levels.last().unwrap().price, 107);
+            assert_eq!(market.asks_levels.first().unwrap().price, 1000);
+            assert_eq!(market.get_best_prices().1, Some(107));
 
-    #[test]
-    fn test_order_aggregation_on_same_price() {
-        let mut market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
-        };
+            assert_eq!(market.asks_levels[0].volume, 18); // price 1000
+        }
 
-        market.add_limit_order_helper(make_order(100, 10, OrderDirection::Buy, 1));
-        market.add_limit_order_helper(make_order(100, 15, OrderDirection::Buy, 2));
-        assert_eq!(market.bids_levels.len(), 1);
-        assert_eq!(market.bids_levels[0].volume, 25);
-        assert_eq!(market.bids_levels[0].orders.len(), 2);
-    }
+        #[test]
+        fn test_add_buy_order_above_best_ask_price() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-    #[test]
-    fn test_get_best_prices_returns_none_when_empty() {
-        let market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
-        };
+            market.add_limit_order_helper(make_order(110, 8, OrderDirection::Sell, 1));
+            market.add_limit_order_helper(make_order(105, 8, OrderDirection::Sell, 2));
+            market.add_limit_order_helper(make_order(105, 10, OrderDirection::Sell, 5));
+            market.add_limit_order_helper(make_order(107, 6, OrderDirection::Sell, 3));
+            market.add_limit_order_helper(make_order(109, 4, OrderDirection::Sell, 4));
 
-        assert_eq!(market.get_best_prices(), (None, None));
-    }
+            assert_eq!(market.get_best_prices().1, Some(105));
 
-    #[test]
-    fn test_cancels_ask_order_correctly() {
-        let mut market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
-        };
+            let order = make_order(107, 20, OrderDirection::Buy, 5);
+            let result = market.add_limit_order(order, 0, 1);
 
-        market.add_limit_order_helper(make_order(1000, 8, OrderDirection::Sell, 2));
-        market.add_limit_order_helper(make_order(107, 6, OrderDirection::Sell, 3));
-        market.add_limit_order_helper(make_order(110, 8, OrderDirection::Sell, 1));
-        market.add_limit_order_helper(make_order(109, 4, OrderDirection::Sell, 4));
-        market.add_limit_order_helper(make_order(1000, 10, OrderDirection::Sell, 5));
-        market.add_limit_order_helper(make_order(1000, 9, OrderDirection::Sell, 6));
-        market.add_limit_order_helper(make_order(1000, 19, OrderDirection::Sell, 7));
-        assert_eq!(market.asks_levels.len(), 4);
-        assert_eq!(market.bids_levels.len(), 0);
+            let Some(result) = result else {
+                panic!("Expected to be some result");
+            };
 
-        market.cancel_order(&make_order(1000, 8, OrderDirection::Sell, 5));
-        let price_level = &market.asks_levels[0];
-        println!("{:?}", price_level.orders);
-        assert_eq!(price_level.orders.len(), 4);
-        assert_eq!(price_level.orders[1].common.status, OrderStatus::Cancelled);
-        assert_eq!(price_level.cancelled, 1);
-    }
+            assert_eq!(market.asks_levels.len(), 3);
+            let partially_filled_order = market
+                .asks_levels
+                .last()
+                .expect("Levels should not be 0")
+                .orders
+                .get(0)
+                .expect("Level should not be 0");
 
-    #[test]
-    fn test_cancels_buy_order_correctly() {
-        let mut market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
-        };
+            println!("{:?}", market.asks_levels);
+            assert_eq!(partially_filled_order.filled_quote_size, 2);
+        }
 
-        market.add_limit_order_helper(make_order(1, 8, OrderDirection::Buy, 1));
-        market.add_limit_order_helper(make_order(3, 8, OrderDirection::Buy, 2));
-        market.add_limit_order_helper(make_order(4, 6, OrderDirection::Buy, 3));
-        market.add_limit_order_helper(make_order(3, 4, OrderDirection::Buy, 4));
-        market.add_limit_order_helper(make_order(8, 10, OrderDirection::Buy, 5));
-        market.add_limit_order_helper(make_order(3, 9, OrderDirection::Buy, 6));
-        assert_eq!(market.bids_levels.len(), 4);
-        assert_eq!(market.asks_levels.len(), 0);
+        #[test]
+        fn test_order_aggregation_on_same_price() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-        market.cancel_order(&make_order(3, 9, OrderDirection::Buy, 6));
-        let price_level = &market.bids_levels[1];
-        assert_eq!(price_level.orders[2].common.status, OrderStatus::Cancelled);
-        assert_eq!(price_level.cancelled, 1);
-    }
+            market.add_limit_order_helper(make_order(100, 10, OrderDirection::Buy, 1));
+            market.add_limit_order_helper(make_order(100, 15, OrderDirection::Buy, 2));
+            assert_eq!(market.bids_levels.len(), 1);
+            assert_eq!(market.bids_levels[0].volume, 25);
+            assert_eq!(market.bids_levels[0].orders.len(), 2);
+        }
 
-    #[test]
-    fn test_prunes_cancelled_orders_correctly() {
-        let mut market = SpotMarket {
-            bids_levels: vec![],
-            asks_levels: vec![],
-            market_id: 0,
-            asset_one: 0,
-            asset_two: 1,
-            base_asset: 0,
-            quote_asset: 1,
-        };
+        #[test]
+        fn test_get_best_prices_returns_none_when_empty() {
+            let market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-        let order_1 = make_order(1, 8, OrderDirection::Buy, 1);
-        let order_2 = make_order(3, 8, OrderDirection::Buy, 2);
-        let order_3 = make_order(1, 6, OrderDirection::Buy, 3);
-        let order_4 = make_order(1, 4, OrderDirection::Buy, 4);
-        let order_5 = make_order(1, 10, OrderDirection::Buy, 5);
-        let order_6 = make_order(1, 9, OrderDirection::Buy, 6);
+            assert_eq!(market.get_best_prices(), (None, None));
+        }
 
-        market.add_limit_order_helper(order_1.clone());
-        market.add_limit_order_helper(order_2.clone());
-        market.add_limit_order_helper(order_3.clone());
-        market.add_limit_order_helper(order_4.clone());
-        market.add_limit_order_helper(order_5.clone());
-        market.add_limit_order_helper(order_6.clone());
+        #[test]
+        fn test_cancels_ask_order_correctly() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-        assert_eq!(market.bids_levels.len(), 2);
-        assert_eq!(market.asks_levels.len(), 0);
+            market.add_limit_order_helper(make_order(1000, 8, OrderDirection::Sell, 2));
+            market.add_limit_order_helper(make_order(107, 6, OrderDirection::Sell, 3));
+            market.add_limit_order_helper(make_order(110, 8, OrderDirection::Sell, 1));
+            market.add_limit_order_helper(make_order(109, 4, OrderDirection::Sell, 4));
+            market.add_limit_order_helper(make_order(1000, 10, OrderDirection::Sell, 5));
+            market.add_limit_order_helper(make_order(1000, 9, OrderDirection::Sell, 6));
+            market.add_limit_order_helper(make_order(1000, 19, OrderDirection::Sell, 7));
+            assert_eq!(market.asks_levels.len(), 4);
+            assert_eq!(market.bids_levels.len(), 0);
 
-        let mut expected_level_volume = 37;
-        assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+            market.cancel_order(&make_order(1000, 8, OrderDirection::Sell, 5));
+            let price_level = &market.asks_levels[0];
+            println!("{:?}", price_level.orders);
+            assert_eq!(price_level.orders.len(), 4);
+            assert_eq!(price_level.orders[1].common.status, OrderStatus::Cancelled);
+            assert_eq!(price_level.cancelled, 1);
+        }
 
-        market.cancel_order(&order_1);
-        expected_level_volume -= order_1.quote_size;
-        assert_eq!(market.bids_levels[0].cancelled, 1);
-        assert_eq!(market.bids_levels[0].orders.len(), 5);
-        assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+        #[test]
+        fn test_cancels_buy_order_correctly() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
 
-        // try cancel again
-        market.cancel_order(&order_1);
-        assert_eq!(market.bids_levels[0].cancelled, 1);
-        assert_eq!(market.bids_levels[0].orders.len(), 5);
-        assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+            market.add_limit_order_helper(make_order(1, 8, OrderDirection::Buy, 1));
+            market.add_limit_order_helper(make_order(3, 8, OrderDirection::Buy, 2));
+            market.add_limit_order_helper(make_order(4, 6, OrderDirection::Buy, 3));
+            market.add_limit_order_helper(make_order(3, 4, OrderDirection::Buy, 4));
+            market.add_limit_order_helper(make_order(8, 10, OrderDirection::Buy, 5));
+            market.add_limit_order_helper(make_order(3, 9, OrderDirection::Buy, 6));
+            assert_eq!(market.bids_levels.len(), 4);
+            assert_eq!(market.asks_levels.len(), 0);
 
-        market.cancel_order(&order_5);
-        expected_level_volume -= order_5.quote_size;
-        assert_eq!(market.bids_levels[0].cancelled, 2);
-        assert_eq!(market.bids_levels[0].orders.len(), 5);
-        assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+            market.cancel_order(&make_order(3, 9, OrderDirection::Buy, 6));
+            let price_level = &market.bids_levels[1];
+            assert_eq!(price_level.orders[2].common.status, OrderStatus::Cancelled);
+            assert_eq!(price_level.cancelled, 1);
+        }
 
-        // should prune here
-        market.cancel_order(&make_order(1, 9, OrderDirection::Buy, 6));
-        expected_level_volume -= order_6.quote_size;
-        assert_eq!(market.bids_levels[0].cancelled, 0);
-        assert_eq!(market.bids_levels[0].orders.len(), 2);
-        assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+        #[test]
+        fn test_prunes_cancelled_orders_correctly() {
+            let mut market = SpotMarket {
+                bids_levels: vec![],
+                asks_levels: vec![],
+                market_id: 0,
+                asset_one: 0,
+                asset_two: 1,
+                base_asset: 0,
+                quote_asset: 1,
+            };
+
+            let order_1 = make_order(1, 8, OrderDirection::Buy, 1);
+            let order_2 = make_order(3, 8, OrderDirection::Buy, 2);
+            let order_3 = make_order(1, 6, OrderDirection::Buy, 3);
+            let order_4 = make_order(1, 4, OrderDirection::Buy, 4);
+            let order_5 = make_order(1, 10, OrderDirection::Buy, 5);
+            let order_6 = make_order(1, 9, OrderDirection::Buy, 6);
+
+            market.add_limit_order_helper(order_1.clone());
+            market.add_limit_order_helper(order_2.clone());
+            market.add_limit_order_helper(order_3.clone());
+            market.add_limit_order_helper(order_4.clone());
+            market.add_limit_order_helper(order_5.clone());
+            market.add_limit_order_helper(order_6.clone());
+
+            assert_eq!(market.bids_levels.len(), 2);
+            assert_eq!(market.asks_levels.len(), 0);
+
+            let mut expected_level_volume = 37;
+            assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+
+            market.cancel_order(&order_1);
+            expected_level_volume -= order_1.quote_size;
+            assert_eq!(market.bids_levels[0].cancelled, 1);
+            assert_eq!(market.bids_levels[0].orders.len(), 5);
+            assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+
+            // try cancel again
+            market.cancel_order(&order_1);
+            assert_eq!(market.bids_levels[0].cancelled, 1);
+            assert_eq!(market.bids_levels[0].orders.len(), 5);
+            assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+
+            market.cancel_order(&order_5);
+            expected_level_volume -= order_5.quote_size;
+            assert_eq!(market.bids_levels[0].cancelled, 2);
+            assert_eq!(market.bids_levels[0].orders.len(), 5);
+            assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+
+            // should prune here
+            market.cancel_order(&make_order(1, 9, OrderDirection::Buy, 6));
+            expected_level_volume -= order_6.quote_size;
+            assert_eq!(market.bids_levels[0].cancelled, 0);
+            assert_eq!(market.bids_levels[0].orders.len(), 2);
+            assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+        }
     }
 }
