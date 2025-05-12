@@ -18,7 +18,7 @@ use crate::{
     state::state::{AccountInfoWithBalances, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound},
-        transaction::{PublicKeyHash, Sha256Hash, SignedTransaction, UnsignedTransaction},
+        transaction::{PublicKeyHash, Sha256Hash, SignedTransaction},
     },
 };
 

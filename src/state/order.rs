@@ -185,6 +185,7 @@ pub struct LimitFillResult {
     pub amount_in: u64,
     pub asset_out: AssetId,
     pub amount_out: u64,
+    pub filled_size: u64,
     pub filled_orders: Vec<LimitOrder>,
     pub counterparty_partial_fill: Option<CounterPartyPartialFill>,
 }

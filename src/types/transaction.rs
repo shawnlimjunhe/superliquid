@@ -109,6 +109,13 @@ impl SignedTransaction {
             UnsignedTransaction::Order(order_transaction) => order_transaction.from,
         }
     }
+
+    pub fn get_nonce(&self) -> Nonce {
+        match &self.tx {
+            UnsignedTransaction::Transfer(transfer_transaction) => transfer_transaction.nonce,
+            UnsignedTransaction::Order(order_transaction) => order_transaction.nonce,
+        }
+    }
 }
 
 impl Deref for SignedTransaction {
