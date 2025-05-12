@@ -11,6 +11,7 @@ use tokio::{net::tcp::OwnedWriteHalf, sync::Mutex};
 use crate::{
     client::ClientConnection,
     message_protocol::{self},
+    state::asset::AssetId,
     types::transaction::{PublicKeyString, TransferTransaction, UnsignedTransaction},
 };
 
@@ -62,6 +63,7 @@ fn handle_create() -> ClientAccount {
 }
 
 async fn handle_drip(
+    trimmed: &str,
     client: &Option<ClientAccount>,
     client_writer: Arc<Mutex<OwnedWriteHalf>>,
 ) -> std::io::Result<()> {
@@ -70,7 +72,16 @@ async fn handle_drip(
         return Ok(());
     };
 
-    message_protocol::send_drip(client_writer, &client.pk_str.to_bytes()).await?;
+    let parts: Vec<&str> = trimmed["drip ".len()..].split_whitespace().collect();
+    if parts.len() != 2 {
+        println!("Usage: drip <asset>");
+    }
+
+    let asset_id = parts[1]
+        .parse::<AssetId>()
+        .expect("To be non negative number");
+
+    message_protocol::send_drip(client_writer, &client.pk_str.to_bytes(), asset_id).await?;
 
     Ok(())
 }
@@ -97,8 +108,8 @@ async fn handle_transfer(
     };
 
     let parts: Vec<&str> = trimmed["transfer ".len()..].split_whitespace().collect();
-    if parts.len() != 2 {
-        println!("Usage: transfer <to> <amount>");
+    if parts.len() != 3 {
+        println!("Usage: transfer <to> <asset_id> <amount>");
     }
 
     // Ensure that pk is valid hex
@@ -110,17 +121,36 @@ async fn handle_transfer(
         println!("Can't transfer to self");
         return Ok(());
     }
-    let amount = parts[1].parse::<u128>().expect("To be non negative number");
+    let asset_id = parts[1]
+        .parse::<AssetId>()
+        .expect("To be non negative number");
 
-    let account_info = message_protocol::send_account_query(
+    let amount = parts[2].parse::<u128>().expect("To be non negative number");
+
+    let account_info_with_balances = message_protocol::send_account_query(
         client.pk_str.to_bytes(),
         client_connection.reader.clone(),
         client_connection.writer.clone(),
     )
     .await?;
 
-    if amount > account_info.balance {
-        println!("Insufficient balance: {:?}", account_info.balance);
+    let account_info = account_info_with_balances.account_info;
+    let token_balances = account_info_with_balances.spot_balances.asset_balances;
+
+    let token_balance_opt = token_balances
+        .iter()
+        .find(|asset| asset.asset_id == asset_id);
+
+    let Some(token_balance) = token_balance_opt else {
+        println!("Insufficient balance {:?}", 0);
+        return Ok(());
+    };
+
+    if amount > token_balance.available_balance {
+        println!(
+            "Insufficient balance: Available balance{:?}",
+            token_balance.available_balance
+        );
         return Ok(());
     }
 
@@ -128,6 +158,7 @@ async fn handle_transfer(
         from: client.pk_str.to_bytes(),
         to: to_pk.to_bytes(),
         amount,
+        asset_id,
         nonce: account_info.expected_nonce,
     });
 
@@ -146,7 +177,7 @@ async fn handle_query(
         return Ok(());
     };
 
-    let account_info = message_protocol::send_account_query(
+    let account_info_with_balances = message_protocol::send_account_query(
         client.pk_str.to_bytes(),
         client_connection.reader.clone(),
         client_connection.writer.clone(),
@@ -154,8 +185,8 @@ async fn handle_query(
     .await?;
 
     println!(
-        "Account: {:?}, balance: {:?}",
-        client.pk_str, account_info.balance
+        "Account: {:?}, balances: {:?}",
+        client.pk_str, account_info_with_balances.spot_balances
     );
 
     return Ok(());
@@ -182,8 +213,8 @@ pub async fn run_console(addr: &str) -> std::io::Result<()> {
                 client_account = Some(handle_create());
             }
             _ if trimmed.starts_with("load ") => client_account = Some(handle_load(trimmed)),
-            "drip" => {
-                handle_drip(&client_account, connection.writer.clone()).await?;
+            _ if trimmed.starts_with("drip") => {
+                handle_drip(trimmed, &client_account, connection.writer.clone()).await?;
             }
             "query" => handle_query(&client_account, &connection).await?,
             _ if trimmed.starts_with("transfer ") => {

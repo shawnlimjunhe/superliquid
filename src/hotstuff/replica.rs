@@ -15,10 +15,10 @@ use crate::{
     hotstuff::utils,
     node::client::handler::{ClientResponse, QueryRequest},
     replica_debug, replica_log,
-    state::state::{AccountInfo, LedgerState},
+    state::state::{AccountInfoWithBalances, LedgerState},
     types::{
         message::{ReplicaInBound, ReplicaOutbound},
-        transaction::{PublicKeyHash, Sha256Hash, SignedTransaction, UnsignedTransaction},
+        transaction::{PublicKeyHash, Sha256Hash, SignedTransaction},
     },
 };
 
@@ -117,8 +117,11 @@ impl HotStuffReplica {
         }
     }
 
-    pub fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
-        self.ledger_state.retrieve_by_pk(public_key)
+    pub fn get_account_info_with_balances(
+        &self,
+        public_key: &PublicKeyHash,
+    ) -> AccountInfoWithBalances {
+        self.ledger_state.get_account_info_with_balances(public_key)
     }
 
     pub fn vote_message(&mut self, node: &Block) -> HotStuffMessage {
@@ -259,12 +262,8 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         for transaction in transactions.iter() {
-            match transaction.tx {
-                UnsignedTransaction::Transfer(_) => {
-                    self.pending_transactions
-                        .insert(transaction.hash, transaction.clone());
-                }
-            }
+            self.pending_transactions
+                .insert(transaction.hash, transaction.clone());
         }
     }
 
@@ -272,12 +271,8 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         for transaction in transactions.iter() {
-            match transaction.tx {
-                UnsignedTransaction::Transfer(_) => {
-                    self.committed_transactions
-                        .insert(transaction.hash, transaction.clone());
-                }
-            }
+            self.committed_transactions
+                .insert(transaction.hash, transaction.clone());
         }
     }
 
@@ -285,11 +280,7 @@ impl HotStuffReplica {
         let transactions = block.transactions();
 
         for transaction in transactions.iter() {
-            match transaction.tx {
-                UnsignedTransaction::Transfer(_) => {
-                    self.pending_transactions.remove_entry(&transaction.hash)
-                }
-            };
+            self.pending_transactions.remove_entry(&transaction.hash);
         }
     }
 
@@ -712,20 +703,16 @@ impl HotStuffReplica {
 
     fn handle_query(&self, query_request: QueryRequest) {
         let query = query_request.query;
-        let account_info = self.get_account_info(&query.account);
+        let account_info_with_balances = self.get_account_info_with_balances(&query.account);
 
-        let _ = query_request
-            .response_channel
-            .send(ClientResponse { account_info });
+        let _ = query_request.response_channel.send(ClientResponse {
+            account_info_with_balances,
+        });
     }
 
     fn handle_transaction(&mut self, txn: SignedTransaction) {
-        match &txn.tx {
-            UnsignedTransaction::Transfer(transfer_transaction) => {
-                let account_info = self.ledger_state.retrieve_by_pk(&transfer_transaction.from);
-                self.mempool.insert(txn, account_info.expected_nonce);
-            }
-        }
+        let account_info = self.ledger_state.get_account_info(&txn.get_from_account());
+        self.mempool.insert(txn, account_info.expected_nonce);
     }
 
     async fn send_new_view_to_leader(&mut self) -> Result<(), std::io::Error> {

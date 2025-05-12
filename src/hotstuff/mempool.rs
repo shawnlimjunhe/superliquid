@@ -65,26 +65,27 @@ impl PriorityMempool {
 
     /// We allow duplicate nonce to be added to the ready bucket, but we enforce uniqueness on execution
     pub fn insert(&mut self, txn: SignedTransaction, expected_nonce: Nonce) {
-        match &txn.tx {
-            UnsignedTransaction::Transfer(transfer_tx) => {
-                if transfer_tx.nonce < expected_nonce {
-                    return;
-                }
+        let transaction_nonce = txn.get_nonce();
+        let transaction_from = txn.get_from_account();
 
-                let account = self
-                    .account_queues
-                    .entry(transfer_tx.from.clone())
-                    .or_default();
-
-                if transfer_tx.nonce == expected_nonce {
-                    self.priority_buckets[Priority::Other as usize]
-                        .push_back((transfer_tx.from.clone(), expected_nonce));
-                    self.ready_transactions_length += 1;
-                }
-                self.length += 1;
-                account.insert(transfer_tx.nonce, txn);
-            }
+        if transaction_nonce < expected_nonce {
+            return;
         }
+        let account = self.account_queues.entry(transaction_from).or_default();
+
+        if transaction_nonce == expected_nonce {
+            match &txn.tx {
+                UnsignedTransaction::Transfer(_) | UnsignedTransaction::Order(_) => {
+                    self.priority_buckets[Priority::Other as usize]
+                        .push_back((transaction_from, expected_nonce));
+                }
+            }
+
+            self.ready_transactions_length += 1;
+        }
+
+        self.length += 1;
+        account.insert(transaction_nonce, txn);
     }
 
     pub fn _pop_next(&mut self) -> Option<SignedTransaction> {
@@ -176,6 +177,7 @@ mod tests {
             from: pk,
             to: [2u8; 32],
             amount: 10,
+            asset_id: 0,
             nonce,
         });
         tx.sign(&mut alice_sk)

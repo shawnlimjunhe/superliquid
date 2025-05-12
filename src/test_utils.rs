@@ -41,6 +41,7 @@ pub mod test_helpers {
             from: get_alice_pk_str().to_bytes(),
             to: get_bob_pk_str().to_bytes(),
             amount: 42,
+            asset_id: 0,
             nonce: 0,
         });
         unsigned_txn.sign(&mut get_alice_sk())

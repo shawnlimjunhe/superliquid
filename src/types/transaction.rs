@@ -6,11 +6,20 @@ use hex::{FromHex, encode as hex_encode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{hotstuff::utils, state::state::Nonce};
+use crate::{
+    hotstuff::utils,
+    state::{
+        asset::AssetId,
+        order::{OrderDirection, OrderType},
+        spot_clearinghouse::MarketId,
+        state::Nonce,
+    },
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UnsignedTransaction {
     Transfer(TransferTransaction),
+    Order(OrderTransaction),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -18,6 +27,18 @@ pub struct TransferTransaction {
     pub from: PublicKeyHash,
     pub to: PublicKeyHash,
     pub amount: u128,
+    pub asset_id: AssetId,
+    pub nonce: Nonce,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OrderTransaction {
+    pub from: PublicKeyHash,
+    pub market_id: MarketId,
+    pub direction: OrderDirection,
+    pub order_type: OrderType,
+    pub order_size: u64,
+
     pub nonce: Nonce,
 }
 
@@ -70,6 +91,29 @@ impl SignedTransaction {
                     .expect("Conversion from string to signature failed");
                 public_key.verify_strict(&tx_hash, &signature).is_ok()
             }
+
+            UnsignedTransaction::Order(order_transaction) => {
+                let public_key =
+                    PublicKeyString::from_bytes(order_transaction.from).as_public_key();
+                let tx_hash = self.hash();
+                let signature = utils::string_to_sig(&self.signature.as_str())
+                    .expect("Conversion from string to signature failed");
+                public_key.verify_strict(&tx_hash, &signature).is_ok()
+            }
+        }
+    }
+
+    pub fn get_from_account(&self) -> PublicKeyHash {
+        match &self.tx {
+            UnsignedTransaction::Transfer(transfer_transaction) => transfer_transaction.from,
+            UnsignedTransaction::Order(order_transaction) => order_transaction.from,
+        }
+    }
+
+    pub fn get_nonce(&self) -> Nonce {
+        match &self.tx {
+            UnsignedTransaction::Transfer(transfer_transaction) => transfer_transaction.nonce,
+            UnsignedTransaction::Order(order_transaction) => order_transaction.nonce,
         }
     }
 }
@@ -204,6 +248,7 @@ mod tests {
             from: vk.to_bytes(),
             to: PublicKeyString::default().to_bytes(),
             amount: 42,
+            asset_id: 0,
             nonce: 0,
         });
 
@@ -222,6 +267,7 @@ mod tests {
             from: vk.to_bytes(),
             to: PublicKeyString::default().to_bytes(),
             amount: 100,
+            asset_id: 0,
             nonce: 0,
         });
 
@@ -324,6 +370,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 123,
+                asset_id: 0,
                 nonce: 0,
             });
             let tx2 = tx1.clone();
@@ -338,6 +385,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 123,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -345,6 +393,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 456,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -367,6 +416,7 @@ mod tests {
                 from: vk2.to_bytes(), // set from wrong key
                 to: PublicKeyString::default().to_bytes(),
                 amount: 100,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -387,6 +437,7 @@ mod tests {
                 from: vk1.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 50,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -394,6 +445,7 @@ mod tests {
                 from: vk2.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 50,
+                asset_id: 0,
                 nonce: 0,
             });
 
@@ -414,6 +466,7 @@ mod tests {
                 from: vk.to_bytes(),
                 to: PublicKeyString::default().to_bytes(),
                 amount: 777,
+                asset_id: 0,
                 nonce: 0,
             });
 

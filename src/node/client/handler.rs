@@ -9,7 +9,7 @@ use tokio::{
 use crate::{
     message_protocol::{self, AppMessage, ControlMessage},
     node::{peer::broadcast::broadcast_transaction, state::Node},
-    state::state::AccountInfo,
+    state::{asset::AssetId, state::AccountInfoWithBalances},
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
         transaction::{PublicKeyHash, SignedTransaction, TransferTransaction, UnsignedTransaction},
@@ -23,7 +23,7 @@ pub struct ClientQuery {
 }
 
 pub struct ClientResponse {
-    pub account_info: AccountInfo,
+    pub account_info_with_balances: AccountInfoWithBalances,
 }
 
 pub struct QueryRequest {
@@ -45,8 +45,8 @@ pub(super) async fn handle_client_connection(
             Some(Message::Application(AppMessage::Query)) => {
                 handle_query(socket.writer.clone(), &node).await?;
             }
-            Some(Message::Application(AppMessage::Drip(pk))) => {
-                handle_drip(&node, pk, to_replica_tx.clone()).await?
+            Some(Message::Application(AppMessage::Drip(pk, asset_id))) => {
+                handle_drip(&node, pk, asset_id, to_replica_tx.clone()).await?
             }
             Some(Message::Application(AppMessage::AccountQuery(pk))) => {
                 handle_account_query(socket.writer.clone(), pk, to_replica_tx.clone()).await?;
@@ -90,7 +90,9 @@ pub(super) async fn handle_account_query(
     // send to client
     message_protocol::send_message(
         writer,
-        &&Message::Application(AppMessage::AccountQueryResponse(response.account_info)),
+        &&Message::Application(AppMessage::AccountQueryResponse(
+            response.account_info_with_balances,
+        )),
     )
     .await
 }
@@ -98,6 +100,7 @@ pub(super) async fn handle_account_query(
 pub(super) async fn handle_drip(
     node: &Arc<Node>,
     pk_bytes: PublicKeyHash,
+    asset_id: AssetId,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
     let mut faucet_key = node.faucet_key.clone();
@@ -105,11 +108,14 @@ pub(super) async fn handle_drip(
 
     let response = send_query_to_replica(&faucet_pk_bytes, to_replica_tx.clone()).await?;
 
+    let account_info = response.account_info_with_balances.account_info;
+
     let drip_txn = UnsignedTransaction::Transfer(TransferTransaction {
         to: pk_bytes,
         from: faucet_pk_bytes,
         amount: 100000,
-        nonce: response.account_info.expected_nonce,
+        asset_id,
+        nonce: account_info.expected_nonce,
     });
 
     let drip_txn = drip_txn.sign(&mut faucet_key);

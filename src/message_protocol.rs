@@ -5,7 +5,8 @@ use tokio::sync::Mutex;
 use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
-use crate::state::state::AccountInfo;
+use crate::state::asset::AssetId;
+use crate::state::state::AccountInfoWithBalances;
 use crate::types::message::Message;
 use crate::types::transaction::{PublicKeyHash, Sha256Hash, SignedTransaction};
 use std::io::{Error, ErrorKind, Result};
@@ -16,10 +17,10 @@ pub enum AppMessage {
     Query,
     SubmitTransaction(SignedTransaction),
     Response(Vec<SignedTransaction>),
-    Drip(PublicKeyHash),
+    Drip(PublicKeyHash, AssetId),
     Ack,
     AccountQuery(PublicKeyHash),
-    AccountQueryResponse(AccountInfo),
+    AccountQueryResponse(AccountInfoWithBalances),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -78,8 +79,12 @@ pub async fn send_transaction(
     send_message(writer, &Message::Application(msg)).await
 }
 
-pub async fn send_drip(writer: Arc<Mutex<OwnedWriteHalf>>, pk_bytes: &Sha256Hash) -> Result<()> {
-    let msg = AppMessage::Drip(*pk_bytes);
+pub async fn send_drip(
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    pk_bytes: &Sha256Hash,
+    asset_id: AssetId,
+) -> Result<()> {
+    let msg = AppMessage::Drip(*pk_bytes, asset_id);
 
     send_message(writer, &Message::Application(msg)).await
 }
@@ -88,7 +93,7 @@ pub async fn send_account_query(
     account_public_key: PublicKeyHash,
     reader: Arc<Mutex<OwnedReadHalf>>,
     writer: Arc<Mutex<OwnedWriteHalf>>,
-) -> Result<AccountInfo> {
+) -> Result<AccountInfoWithBalances> {
     let msg = AppMessage::AccountQuery(account_public_key);
     send_message(writer, &Message::Application(msg)).await?;
 
@@ -153,6 +158,9 @@ mod tests {
                         crate::types::transaction::UnsignedTransaction::Transfer(
                             transfer_transaction,
                         ) => assert_eq!(transfer_transaction.amount, 42),
+                        crate::types::transaction::UnsignedTransaction::Order(
+                            _order_transaction,
+                        ) => panic!("Expected order"),
                     }
                 }
                 _ => panic!("Expected Transaction"),
@@ -213,6 +221,9 @@ mod tests {
         match &first_tx.tx {
             crate::types::transaction::UnsignedTransaction::Transfer(transfer_transaction) => {
                 assert_eq!(transfer_transaction.from, get_alice_pk_str().to_bytes());
+            }
+            crate::types::transaction::UnsignedTransaction::Order(_order_transaction) => {
+                panic!("Expected transaction")
             }
         }
 
