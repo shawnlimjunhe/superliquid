@@ -377,7 +377,7 @@ impl SpotClearingHouse {
                             );
 
                             let amount_in =
-                                counterparty_asset_in as u128 * counterparty_in_size as u128;
+                                counterparty_asset_in_lots as u128 * counterparty_in_size as u128;
                             counterparty_asset_in_balance.available_balance += amount_in;
                             counterparty_asset_in_balance.total_balance += amount_in;
                         }
@@ -430,8 +430,8 @@ impl SpotClearingHouse {
                                         counterparty_asset_in,
                                     );
 
-                                let amount_in =
-                                    counterparty_asset_in as u128 * counterparty_in_size as u128;
+                                let amount_in = counterparty_asset_in_lots as u128
+                                    * counterparty_in_size as u128;
                                 counterparty_asset_in_balance.available_balance += amount_in;
                                 counterparty_asset_in_balance.total_balance += amount_in;
                             }
