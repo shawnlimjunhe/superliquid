@@ -4,6 +4,7 @@ type AssetIdCounter = AssetId;
 pub struct Asset {
     pub asset_id: AssetId,
     pub asset_name: String,
+    pub lot_size: u32,
     pub decimals: u8,
 }
 
@@ -18,12 +19,14 @@ impl AssetManager {
             asset_id: 0,
             asset_name: "Supe".to_owned(),
             decimals: 6,
+            lot_size: 1000,
         };
 
         let asset_1 = Asset {
             asset_id: 1,
             asset_name: "USD".to_owned(),
             decimals: 6,
+            lot_size: 1000,
         };
 
         let assets = vec![asset_0, asset_1];

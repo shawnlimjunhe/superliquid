@@ -5,7 +5,7 @@ use crate::types::transaction::PublicKeyHash;
 use super::{asset::AssetId, spot_clearinghouse::MarketId};
 
 pub type OrderId = u64;
-pub type OrderPrice = u64;
+pub type OrderPriceMultiple = u64;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum OrderStatus {
@@ -36,7 +36,7 @@ impl OrderStateManager {
         market_id: MarketId,
         account: PublicKeyHash,
         direction: OrderDirection,
-        price: OrderPrice,
+        price_multiple: OrderPriceMultiple,
         quote_size: u64,
     ) -> LimitOrder {
         let id = self.next_id;
@@ -49,9 +49,9 @@ impl OrderStateManager {
                 account,
                 direction,
             },
-            price,
-            quote_size,
-            filled_quote_size: 0,
+            price_multiple,
+            base_lots: quote_size,
+            filled_base_lots: 0,
         }
     }
 
@@ -66,7 +66,7 @@ impl OrderStateManager {
         self.next_id += 1;
         match direction {
             OrderDirection::Buy => MarketOrder::Buy(MarketBuyOrder {
-                base_size: size,
+                quote_size: size,
                 filled_size: 0,
                 average_execution_price: 0,
                 common: CommonOrderFields {
@@ -78,7 +78,7 @@ impl OrderStateManager {
                 },
             }),
             OrderDirection::Sell => MarketOrder::Sell(MarketSellOrder {
-                quote_size: size,
+                base_size: size,
                 filled_size: 0,
                 average_execution_price: 0,
                 common: CommonOrderFields {
@@ -95,7 +95,7 @@ impl OrderStateManager {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OrderType {
-    Limit(OrderPrice),
+    Limit(OrderPriceMultiple),
     Market,
 }
 
@@ -133,9 +133,9 @@ impl Order {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LimitOrder {
     pub common: CommonOrderFields,
-    pub price: OrderPrice, // quote/base
-    pub quote_size: u64,
-    pub filled_quote_size: u64,
+    pub price_multiple: OrderPriceMultiple, // quote/base
+    pub base_lots: u64,
+    pub filled_base_lots: u64,
     // type
     // trigger conditions
     // tp/sl
@@ -149,7 +149,7 @@ pub enum MarketOrder {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MarketSellOrder {
-    pub quote_size: u64,
+    pub base_size: u64,
     pub filled_size: u64,
     pub average_execution_price: u64,
     pub common: CommonOrderFields,
@@ -157,7 +157,7 @@ pub struct MarketSellOrder {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MarketBuyOrder {
-    pub base_size: u64,
+    pub quote_size: u64,
     pub filled_size: u64,
     pub average_execution_price: u64,
     pub common: CommonOrderFields,
@@ -172,55 +172,60 @@ impl MarketOrder {
     }
 }
 
-pub struct CounterPartyPartialFill {
+pub struct ResidualOrder {
     pub order_id: OrderId,
     pub account_public_key: PublicKeyHash,
-    pub order_price: OrderPrice,
-    pub filled_quote_amount: u64,
+    pub price_multiple: OrderPriceMultiple,
+    pub filled_base_lots: u64,
+}
+
+#[derive(Debug)]
+pub struct UserExecutionResult {
+    pub order_id: OrderId,
+    pub asset_in: AssetId,
+    pub lots_in: u64,
+    pub asset_out: AssetId,
+    pub lots_out: u64,
+    pub filled_size: u64,
 }
 
 pub struct LimitFillResult {
-    pub order_id: OrderId,
-    pub asset_in: AssetId,
-    pub amount_in: u64,
-    pub asset_out: AssetId,
-    pub amount_out: u64,
-    pub filled_size: u64,
+    pub user_order: UserExecutionResult,
     pub filled_orders: Vec<LimitOrder>,
-    pub counterparty_partial_fill: Option<CounterPartyPartialFill>,
+    pub residual_order: Option<ResidualOrder>,
 }
 
 pub enum MarketOrderMatchingResults {
     SellInQuote {
         order_id: OrderId,
-        quote_filled_amount: u64,
-        base_amount_in: u64,
+        base_filled_lots: u64,
+        quote_lots_in: u64,
         filled_orders: Vec<LimitOrder>,
-        counterparty_partial_fill: Option<CounterPartyPartialFill>,
+        counterparty_partial_fill: Option<ResidualOrder>,
     },
     BuyInBase {
         order_id: OrderId,
-        base_filled_amount: u64,
-        quote_amount_in: u64,
+        quote_filled_amount: u64,
+        base_lots_in: u64,
         filled_orders: Vec<LimitOrder>,
-        counterparty_partial_fill: Option<CounterPartyPartialFill>,
+        counterparty_partial_fill: Option<ResidualOrder>,
     },
 }
 pub enum OrderChange {
     LimitOrderChange {
         order_id: OrderId,
-        filled_amount: u64,
+        filled_lots: u64,
         average_execution_price: u128,
     },
     MarketOrderChange {
         order_id: OrderId,
-        filled_amount: u64,
+        filled_lots: u64,
         average_execution_price: u64,
     },
 }
 
 pub struct ExecutionResults {
     pub filled_orders: Vec<LimitOrder>,
-    pub counterparty_partial_fill: Option<CounterPartyPartialFill>,
+    pub residual_order: Option<ResidualOrder>,
     pub user_order_change: Option<OrderChange>,
 }

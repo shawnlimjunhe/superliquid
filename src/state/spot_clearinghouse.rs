@@ -7,8 +7,8 @@ use crate::{config, state::order::OrderDirection, types::transaction::PublicKeyH
 use super::{
     asset::AssetId,
     order::{
-        CounterPartyPartialFill, ExecutionResults, LimitFillResult, MarketOrder,
-        MarketOrderMatchingResults, Order, OrderChange,
+        ExecutionResults, LimitFillResult, MarketOrder, MarketOrderMatchingResults, Order,
+        OrderChange, OrderStatus, ResidualOrder, UserExecutionResult,
     },
     spot_market::SpotMarket,
 };
@@ -16,12 +16,37 @@ use super::{
 pub type MarketId = usize;
 type MarketIdCounter = MarketId;
 
-pub fn base_to_quote(base_amount: u64, price: u64) -> u64 {
-    base_amount * price
+#[derive(Debug)]
+pub struct MarketPrecision {
+    pub base_lot_size: u32,  // base units per base lot
+    pub quote_lot_size: u32, // quote units per quote lot
+    pub tick: u32,           // quote units per tick
+    pub tick_decimals: u8,
 }
 
-pub fn quote_to_base(quote_amount: u64, price: u64) -> u64 {
-    quote_amount / price
+pub fn base_to_quote_lots(base_lots: u64, price_ticks: u64, precision: &MarketPrecision) -> u64 {
+    let numerator = base_lots as u128
+        * precision.base_lot_size as u128
+        * price_ticks as u128
+        * precision.tick as u128;
+
+    let denominator = precision.quote_lot_size as u128 * 10u128.pow(precision.tick_decimals as u32);
+
+    (numerator / denominator) as u64
+}
+
+pub fn quote_lots_to_base_lots(
+    quote_lots: u64,
+    price_ticks: u64,
+    precision: &MarketPrecision,
+) -> u64 {
+    let numerator = quote_lots as u128
+        * precision.quote_lot_size as u128
+        * 10u128.pow(precision.tick_decimals as u32);
+    let denominator =
+        price_ticks as u128 * precision.tick as u128 * precision.base_lot_size as u128;
+
+    (numerator / denominator) as u64
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -119,23 +144,55 @@ impl SpotClearingHouse {
         self.asset_to_market_map.get(&pair).copied()
     }
 
-    fn create_new_market(&mut self, normalised_pair: (AssetId, AssetId)) -> MarketId {
+    pub fn get_quote_base_tick_from_id(
+        &self,
+        market_id: MarketId,
+    ) -> Option<(AssetId, AssetId, u32, u8)> {
+        let Some(market) = self.markets.get(market_id) else {
+            return None;
+        };
+        Some((
+            market.base_asset,
+            market.base_asset,
+            market.tick,
+            market.tick_decimals,
+        ))
+    }
+
+    fn create_new_market(
+        &mut self,
+        normalised_pair: (AssetId, AssetId),
+        tick: u32,
+        tick_decimals: u8,
+    ) -> MarketId {
         let market_id = self.next_id;
-        let market = SpotMarket::new(market_id, normalised_pair.0, normalised_pair.1);
+        let market = SpotMarket::new(
+            market_id,
+            normalised_pair.0,
+            normalised_pair.1,
+            tick,
+            tick_decimals,
+        );
         self.markets.push(market);
         self.asset_to_market_map.insert(normalised_pair, market_id);
         self.next_id += 1;
         market_id
     }
 
-    pub fn add_market(&mut self, asset_one: AssetId, asset_two: AssetId) -> MarketId {
+    pub fn add_market(
+        &mut self,
+        asset_one: AssetId,
+        asset_two: AssetId,
+        tick: u32,
+        tick_decimals: u8,
+    ) -> MarketId {
         if let Some(market_id) = self.get_market_id_from_pair(asset_one, asset_two) {
             return market_id;
         }
 
         let normalised_pair = Self::normalise_pair(asset_one, asset_two);
 
-        self.create_new_market(normalised_pair)
+        self.create_new_market(normalised_pair, tick, tick_decimals)
     }
 
     pub fn get_account_token_balance_mut(
@@ -176,7 +233,11 @@ impl SpotClearingHouse {
     }
 
     /// Handles order matching and resultant balance transfers if any
-    pub fn handle_order(&mut self, order: Order) -> Option<ExecutionResults> {
+    pub fn handle_order(
+        &mut self,
+        order: Order,
+        precision: &MarketPrecision,
+    ) -> Option<ExecutionResults> {
         let market_id = order.get_market_id().clone();
 
         match order {
@@ -191,22 +252,16 @@ impl SpotClearingHouse {
                 // Check whether account has enough balance to place the order
                 match limit_order.common.direction {
                     OrderDirection::Buy => {
-                        let base_amount = quote_to_base(limit_order.quote_size, limit_order.price);
-                        let base_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
-
-                        if base_token_balance.available_balance < base_amount as u128 {
-                            println!("Not enough balance");
-                            return None;
-                        }
-                        base_token_balance.available_balance -= base_amount as u128;
-                    }
-                    OrderDirection::Sell => {
-                        let quote_amount = limit_order.quote_size;
-                        let quote_token_balance = Self::get_account_token_balance_mut(
-                            account_balance,
-                            market.quote_asset,
+                        let quote_lots = base_to_quote_lots(
+                            limit_order.base_lots,
+                            limit_order.price_multiple,
+                            precision,
                         );
+
+                        let quote_amount = quote_lots * precision.quote_lot_size as u64;
+
+                        let quote_token_balance =
+                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
 
                         if quote_token_balance.available_balance < quote_amount as u128 {
                             println!("Not enough balance");
@@ -214,134 +269,188 @@ impl SpotClearingHouse {
                         }
                         quote_token_balance.available_balance -= quote_amount as u128;
                     }
+                    OrderDirection::Sell => {
+                        let base_lots = limit_order.base_lots;
+                        let base_token_balance =
+                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
+
+                        let base_amount = base_lots * precision.base_lot_size as u64;
+
+                        if base_token_balance.available_balance < base_amount as u128 {
+                            println!("Not enough balance");
+                            return None;
+                        }
+                        base_token_balance.available_balance -= base_amount as u128;
+                    }
                 }
 
                 let base_asset = market.base_asset;
-                let quote_asset = market.quote_asset;
-                let results = market.add_limit_order(limit_order.clone(), base_asset, quote_asset);
+                let quote_asset = market.base_asset;
+                let results =
+                    market.add_limit_order(limit_order.clone(), base_asset, quote_asset, precision);
 
                 match results {
                     Some(limit_fill_results) => {
                         // Limit order was able to execute at a better price
                         let LimitFillResult {
-                            order_id,
-                            asset_out: user_asset_out,
-                            amount_out,
-                            asset_in: user_asset_in,
-                            amount_in,
+                            residual_order,
+                            user_order,
                             filled_orders,
-                            counterparty_partial_fill,
-                            filled_size,
                         } = limit_fill_results;
 
+                        let UserExecutionResult {
+                            order_id,
+                            asset_out: user_asset_out,
+                            lots_out,
+                            asset_in: user_asset_in,
+                            lots_in,
+                            filled_size,
+                        } = user_order;
+
+                        let mut out_lot_size = precision.base_lot_size;
+                        let mut in_lot_size = precision.quote_lot_size;
+
+                        if user_asset_out == quote_asset {
+                            (out_lot_size, in_lot_size) = (in_lot_size, out_lot_size)
+                        }
                         // Modify user's token balance
                         let asset_out_balance =
                             Self::get_account_token_balance_mut(account_balance, user_asset_out);
-                        asset_out_balance.total_balance -= amount_out as u128;
+                        let amount_out = out_lot_size as u128 * lots_out as u128;
+                        asset_out_balance.total_balance -= amount_out;
 
                         let asset_in_balance =
                             Self::get_account_token_balance_mut(account_balance, user_asset_in);
-                        asset_in_balance.total_balance += amount_in as u128;
-                        asset_in_balance.available_balance += amount_in as u128;
+                        let amount_in = in_lot_size as u128 * lots_in as u128;
+                        asset_in_balance.total_balance += amount_in;
+                        asset_in_balance.available_balance += amount_in;
+
+                        // counterparty is symmetric to user
+                        let counterparty_asset_in = user_asset_out;
+                        let counterparty_asset_out = user_asset_in;
+                        let counterparty_out_size = in_lot_size;
+                        let counterparty_in_size = out_lot_size;
 
                         // Modify filled order's token balance if any
-                        for order in filled_orders.iter() {
+                        for filled_order in filled_orders.iter() {
+                            if filled_order.common.status == OrderStatus::Cancelled {
+                                continue;
+                            }
                             // Buy orders
                             let account_balance =
-                                self.get_account_balance_mut(&order.common.account);
+                                self.get_account_balance_mut(&filled_order.common.account);
 
-                            let filled_quote_amount = order.quote_size - order.filled_quote_size;
+                            let filled_base_lots =
+                                filled_order.base_lots - filled_order.filled_base_lots;
 
-                            let mut counterparty_asset_in_amount = filled_quote_amount;
-                            let mut counterparty_asset_out_amount = filled_quote_amount;
+                            let mut counterparty_asset_in_lots = filled_base_lots;
+                            let mut counterparty_asset_out_lots = filled_base_lots;
 
-                            if user_asset_in == base_asset {
-                                counterparty_asset_out_amount =
-                                    quote_to_base(filled_quote_amount, order.price);
+                            if counterparty_asset_in == base_asset {
+                                // counter pay recieves quote asset
+                                counterparty_asset_out_lots = base_to_quote_lots(
+                                    filled_base_lots,
+                                    filled_order.price_multiple,
+                                    precision,
+                                );
                             } else {
-                                counterparty_asset_in_amount =
-                                    quote_to_base(filled_quote_amount, order.price)
+                                counterparty_asset_in_lots = base_to_quote_lots(
+                                    filled_base_lots,
+                                    filled_order.price_multiple,
+                                    precision,
+                                )
                             }
 
                             // counter pay recieves asset_out at it's price
                             let counterparty_asset_out_balance =
-                                Self::get_account_token_balance_mut(account_balance, user_asset_in);
+                                Self::get_account_token_balance_mut(
+                                    account_balance,
+                                    counterparty_asset_out,
+                                );
 
                             counterparty_asset_out_balance.total_balance -=
-                                counterparty_asset_out_amount as u128;
+                                counterparty_asset_out_lots as u128 * counterparty_out_size as u128;
 
                             let counterparty_asset_in_balance = Self::get_account_token_balance_mut(
                                 account_balance,
                                 user_asset_out,
                             );
 
-                            counterparty_asset_in_balance.available_balance +=
-                                counterparty_asset_in_amount as u128;
-                            counterparty_asset_in_balance.total_balance +=
-                                counterparty_asset_in_amount as u128;
+                            let amount_in =
+                                counterparty_asset_in as u128 * counterparty_in_size as u128;
+                            counterparty_asset_in_balance.available_balance += amount_in;
+                            counterparty_asset_in_balance.total_balance += amount_in;
                         }
 
                         // Modify partial fill's token balance if any
-                        match &counterparty_partial_fill {
+                        match &residual_order {
                             Some(counter_partial_fill) => {
                                 // Handle partial fill
-                                let CounterPartyPartialFill {
+                                let ResidualOrder {
                                     account_public_key: counterparty_public_key,
-                                    filled_quote_amount,
-                                    order_price,
+                                    filled_base_lots,
+                                    price_multiple: order_price,
                                     ..
                                 } = counter_partial_fill;
 
                                 let counterparty_balance =
                                     &mut self.get_account_balance(&counterparty_public_key);
 
-                                let mut counterparty_asset_in_amount = *filled_quote_amount;
-                                let mut counterparty_asset_out_amount = *filled_quote_amount;
+                                let mut counterparty_asset_in_lots = *filled_base_lots;
+                                let mut counterparty_asset_out_lots = *filled_base_lots;
 
-                                if user_asset_in == base_asset {
-                                    counterparty_asset_out_amount =
-                                        quote_to_base(*filled_quote_amount, *order_price);
+                                if counterparty_asset_in == base_asset {
+                                    counterparty_asset_out_lots = base_to_quote_lots(
+                                        *filled_base_lots,
+                                        *order_price,
+                                        precision,
+                                    );
                                 } else {
-                                    counterparty_asset_in_amount =
-                                        quote_to_base(*filled_quote_amount, *order_price)
+                                    counterparty_asset_in_lots = base_to_quote_lots(
+                                        *filled_base_lots,
+                                        *order_price,
+                                        precision,
+                                    )
                                 }
 
                                 // counter pay recieves asset_out at it's price
                                 let counterparty_asset_out_balance =
                                     Self::get_account_token_balance_mut(
                                         counterparty_balance,
-                                        user_asset_in,
+                                        counterparty_asset_out,
                                     );
 
                                 counterparty_asset_out_balance.total_balance -=
-                                    counterparty_asset_out_amount as u128;
+                                    counterparty_asset_out_lots as u128
+                                        * counterparty_out_size as u128;
 
                                 let counterparty_asset_in_balance =
                                     Self::get_account_token_balance_mut(
                                         counterparty_balance,
-                                        user_asset_out,
+                                        counterparty_asset_in,
                                     );
-                                counterparty_asset_in_balance.available_balance +=
-                                    counterparty_asset_in_amount as u128;
-                                counterparty_asset_in_balance.total_balance +=
-                                    counterparty_asset_in_amount as u128;
+
+                                let amount_in =
+                                    counterparty_asset_in as u128 * counterparty_in_size as u128;
+                                counterparty_asset_in_balance.available_balance += amount_in;
+                                counterparty_asset_in_balance.total_balance += amount_in;
                             }
                             None => {
                                 // No partial fills, do nothing
                             }
                         }
 
-                        let mut average_execution_price = amount_out / amount_in;
+                        let mut average_execution_price = lots_out / lots_in;
                         if user_asset_in == base_asset {
-                            average_execution_price = amount_in / amount_out; // quote / base
+                            average_execution_price = lots_in / lots_out; // quote / base
                         }
 
                         return Some(ExecutionResults {
                             filled_orders,
-                            counterparty_partial_fill,
+                            residual_order,
                             user_order_change: Some(OrderChange::LimitOrderChange {
                                 order_id,
-                                filled_amount: filled_size,
+                                filled_lots: filled_size,
                                 average_execution_price: average_execution_price as u128,
                             }),
                         });
@@ -353,7 +462,7 @@ impl SpotClearingHouse {
 
                 return Some(ExecutionResults {
                     filled_orders: vec![],
-                    counterparty_partial_fill: None,
+                    residual_order: None,
                     user_order_change: None,
                 });
             }
@@ -368,35 +477,33 @@ impl SpotClearingHouse {
                 // Check available balance
                 match &market_order {
                     MarketOrder::Sell(sell_order) => {
-                        let quote_token_balance = Self::get_account_token_balance_mut(
-                            account_balance,
-                            market.quote_asset,
-                        );
-                        if quote_token_balance.available_balance < sell_order.quote_size as u128 {
+                        let quote_token_balance =
+                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
+                        if quote_token_balance.available_balance < sell_order.base_size as u128 {
                             println!("Not enough balance");
                         }
-                        quote_token_balance.available_balance -= sell_order.quote_size as u128;
+                        quote_token_balance.available_balance -= sell_order.base_size as u128;
                     }
                     MarketOrder::Buy(buy_order) => {
                         let base_token_balance =
                             Self::get_account_token_balance_mut(account_balance, market.base_asset);
-                        if base_token_balance.available_balance < buy_order.base_size as u128 {
+                        if base_token_balance.available_balance < buy_order.quote_size as u128 {
                             println!("Not enough balance");
                         }
-                        base_token_balance.available_balance -= buy_order.base_size as u128;
+                        base_token_balance.available_balance -= buy_order.quote_size as u128;
                     }
                 };
 
-                let results = market.handle_market_order(market_order);
+                let results = market.handle_market_order(market_order, precision);
                 let base_asset = market.base_asset;
-                let quote_asset = market.quote_asset;
+                let quote_asset = market.base_asset;
 
                 // Settlement
                 match results {
                     MarketOrderMatchingResults::SellInQuote {
                         order_id,
-                        quote_filled_amount,
-                        base_amount_in,
+                        base_filled_lots: quote_filled_amount,
+                        quote_lots_in: base_amount_in,
                         filled_orders,
                         counterparty_partial_fill,
                     } => {
@@ -409,16 +516,25 @@ impl SpotClearingHouse {
                         base_token_balance.available_balance += base_amount_in as u128;
 
                         let average_execution_price = quote_filled_amount / base_amount_in;
-                        for order in filled_orders.iter() {
+
+                        for filled_order in filled_orders.iter() {
+                            if filled_order.common.status == OrderStatus::Cancelled {
+                                continue;
+                            }
                             // Buy orders
                             let account_balance =
-                                self.get_account_balance_mut(&order.common.account);
-                            let filled_quote_amount = order.quote_size - order.filled_quote_size;
+                                self.get_account_balance_mut(&filled_order.common.account);
+                            let filled_quote_amount =
+                                filled_order.base_lots - filled_order.filled_base_lots;
 
                             let base_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, base_asset);
-                            base_token_balance.total_balance -=
-                                quote_to_base(filled_quote_amount, order.price) as u128;
+                            base_token_balance.total_balance -= base_to_quote_lots(
+                                filled_quote_amount,
+                                filled_order.price_multiple,
+                                precision,
+                            )
+                                as u128;
 
                             let quote_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, quote_asset);
@@ -428,10 +544,10 @@ impl SpotClearingHouse {
                         }
                         match &counterparty_partial_fill {
                             Some(counter_partial_fill) => {
-                                let CounterPartyPartialFill {
+                                let ResidualOrder {
                                     account_public_key,
-                                    filled_quote_amount,
-                                    order_price,
+                                    filled_base_lots: filled_quote_lots,
+                                    price_multiple: order_price,
                                     ..
                                 } = counter_partial_fill;
 
@@ -443,60 +559,65 @@ impl SpotClearingHouse {
                                     base_asset,
                                 );
                                 base_token_balance.total_balance -=
-                                    quote_to_base(*filled_quote_amount, *order_price) as u128;
+                                    base_to_quote_lots(*filled_quote_lots, *order_price, precision)
+                                        as u128;
 
                                 let quote_token_balance = Self::get_account_token_balance_mut(
                                     account_balance,
                                     quote_asset,
                                 );
 
-                                quote_token_balance.available_balance +=
-                                    *filled_quote_amount as u128;
-                                quote_token_balance.total_balance += *filled_quote_amount as u128;
+                                quote_token_balance.available_balance += *filled_quote_lots as u128;
+                                quote_token_balance.total_balance += *filled_quote_lots as u128;
                             }
                             None => {}
                         }
 
                         return Some(ExecutionResults {
                             filled_orders,
-                            counterparty_partial_fill: counterparty_partial_fill,
+                            residual_order: counterparty_partial_fill,
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
-                                filled_amount: quote_filled_amount,
+                                filled_lots: quote_filled_amount,
                                 average_execution_price: average_execution_price,
                             }),
                         });
                     }
                     MarketOrderMatchingResults::BuyInBase {
                         order_id,
-                        base_filled_amount,
+                        quote_filled_amount: base_filled_amount,
                         filled_orders,
-                        quote_amount_in,
+                        base_lots_in: quote_amount_in,
                         counterparty_partial_fill,
                     } => {
                         let base_token_balance =
                             Self::get_account_token_balance_mut(account_balance, market.base_asset);
                         base_token_balance.total_balance -= base_filled_amount as u128;
 
-                        let quote_token_balance = Self::get_account_token_balance_mut(
-                            account_balance,
-                            market.quote_asset,
-                        );
+                        let quote_token_balance =
+                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
                         quote_token_balance.total_balance += quote_amount_in as u128;
                         quote_token_balance.available_balance += quote_amount_in as u128;
 
                         let average_execution_price = quote_amount_in / base_filled_amount;
 
-                        for order in filled_orders.iter() {
+                        for filled_order in filled_orders.iter() {
+                            if filled_order.common.status == OrderStatus::Cancelled {
+                                continue;
+                            }
                             // Sell orders
                             let account_balance =
-                                self.get_account_balance_mut(&order.common.account);
-                            let filled_quote_amount = order.quote_size - order.filled_quote_size;
+                                self.get_account_balance_mut(&filled_order.common.account);
+                            let filled_quote_amount =
+                                filled_order.base_lots - filled_order.filled_base_lots;
 
                             let base_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, base_asset);
-                            let filled_base_amount =
-                                quote_to_base(filled_quote_amount, order.price) as u128;
+                            let filled_base_amount = base_to_quote_lots(
+                                filled_quote_amount,
+                                filled_order.price_multiple,
+                                precision,
+                            ) as u128;
                             base_token_balance.total_balance += filled_base_amount;
                             base_token_balance.available_balance += filled_base_amount;
 
@@ -507,10 +628,10 @@ impl SpotClearingHouse {
                         }
                         match &counterparty_partial_fill {
                             Some(counter_partial_fill) => {
-                                let CounterPartyPartialFill {
+                                let ResidualOrder {
                                     account_public_key,
-                                    filled_quote_amount,
-                                    order_price,
+                                    filled_base_lots: filled_quote_lots,
+                                    price_multiple: order_price,
                                     ..
                                 } = counter_partial_fill;
 
@@ -521,26 +642,27 @@ impl SpotClearingHouse {
                                     account_balance,
                                     base_asset,
                                 );
-                                let filled_base_amount =
-                                    quote_to_base(*filled_quote_amount, *order_price) as u128;
-                                base_token_balance.total_balance += filled_base_amount;
-                                base_token_balance.available_balance += filled_base_amount;
+                                let filled_base_lots =
+                                    base_to_quote_lots(*filled_quote_lots, *order_price, precision)
+                                        as u128;
+                                base_token_balance.total_balance += filled_base_lots;
+                                base_token_balance.available_balance += filled_base_lots;
 
                                 let quote_token_balance = Self::get_account_token_balance_mut(
                                     account_balance,
                                     quote_asset,
                                 );
 
-                                quote_token_balance.total_balance -= *filled_quote_amount as u128;
+                                quote_token_balance.total_balance -= *filled_quote_lots as u128;
                             }
                             None => {}
                         }
                         return Some(ExecutionResults {
                             filled_orders,
-                            counterparty_partial_fill: counterparty_partial_fill,
+                            residual_order: counterparty_partial_fill,
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
-                                filled_amount: base_filled_amount,
+                                filled_lots: base_filled_amount,
                                 average_execution_price: average_execution_price,
                             }),
                         });

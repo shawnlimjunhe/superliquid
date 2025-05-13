@@ -12,10 +12,10 @@ use crate::{
 use super::{
     asset::AssetManager,
     order::{
-        self, CounterPartyPartialFill, ExecutionResults, LimitOrder, MarketOrder, Order, OrderId,
-        OrderStateManager, OrderStatus,
+        self, ExecutionResults, LimitOrder, MarketOrder, Order, OrderId, OrderStateManager,
+        OrderStatus, ResidualOrder,
     },
-    spot_clearinghouse::{AccountBalance, AccountTokenBalance, SpotClearingHouse},
+    spot_clearinghouse::{AccountBalance, AccountTokenBalance, MarketPrecision, SpotClearingHouse},
 };
 
 pub type Balance = u128;
@@ -198,15 +198,36 @@ impl LedgerState {
                 Order::Market(order)
             }
         };
+        let Some((quote_asset, base_asset, tick, tick_decimals)) = self
+            .spot_clearinghouse
+            .get_quote_base_tick_from_id(market_id)
+        else {
+            return None;
+        };
+        let Some(quote_asset) = self.asset_manager.assets.get(quote_asset as usize) else {
+            return None;
+        };
+        let Some(base_asset) = self.asset_manager.assets.get(base_asset as usize) else {
+            return None;
+        };
 
-        let result = self.spot_clearinghouse.handle_order(order.clone());
+        let precision = MarketPrecision {
+            base_lot_size: base_asset.lot_size,
+            quote_lot_size: quote_asset.lot_size,
+            tick,
+            tick_decimals: tick_decimals,
+        };
+
+        let result = self
+            .spot_clearinghouse
+            .handle_order(order.clone(), &precision);
 
         // Update changes to respective account infos
         match result {
             Some(result) => {
                 let ExecutionResults {
                     filled_orders,
-                    counterparty_partial_fill,
+                    residual_order: counterparty_partial_fill,
                     user_order_change,
                 } = result;
 
@@ -214,7 +235,7 @@ impl LedgerState {
                     Some(order_change) => match order_change {
                         order::OrderChange::LimitOrderChange {
                             order_id,
-                            filled_amount,
+                            filled_lots: filled_amount,
                             average_execution_price: _,
                         } => {
                             let account_info = self.get_account_info_mut(&user_account);
@@ -228,7 +249,7 @@ impl LedgerState {
                                 .expect("No open order with order_id");
 
                             let remaining_size =
-                                limit_order.quote_size - limit_order.filled_quote_size;
+                                limit_order.base_lots - limit_order.filled_base_lots;
 
                             if filled_amount < remaining_size {
                                 limit_order.common.status = OrderStatus::PartiallyFilled;
@@ -244,14 +265,14 @@ impl LedgerState {
                         }
                         order::OrderChange::MarketOrderChange {
                             order_id: _,
-                            filled_amount,
+                            filled_lots,
                             average_execution_price,
                         } => match order {
                             Order::Market(MarketOrder::Buy(mut order)) => {
-                                if order.base_size < filled_amount {
+                                if order.quote_size < filled_lots {
                                     order.common.status = OrderStatus::PartiallyFilled;
                                 }
-                                order.filled_size = filled_amount;
+                                order.filled_size = filled_lots;
                                 order.average_execution_price = average_execution_price;
 
                                 let account_info = self.get_account_info_mut(&order.common.account);
@@ -286,10 +307,10 @@ impl LedgerState {
 
                 match counterparty_partial_fill {
                     Some(partial_fill) => {
-                        let CounterPartyPartialFill {
+                        let ResidualOrder {
                             order_id,
                             account_public_key,
-                            filled_quote_amount,
+                            filled_base_lots: filled_quote_lots,
                             ..
                         } = partial_fill;
 
@@ -299,7 +320,7 @@ impl LedgerState {
                             .iter_mut()
                             .find(|order| order.common.id == order_id)
                             .expect("Cant find open order with order id");
-                        order.filled_quote_size += filled_quote_amount;
+                        order.filled_base_lots += filled_quote_lots;
                     }
                     None => {
                         // do nothing
