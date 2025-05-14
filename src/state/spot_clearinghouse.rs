@@ -672,3 +672,10 @@ impl SpotClearingHouse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    mod test_limit_execution_side_effects {}
+
+    mod test_market_execution_side_effects {}
+}
