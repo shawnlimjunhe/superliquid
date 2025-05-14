@@ -72,7 +72,7 @@ impl SpotMarket {
             let mid_price = levels[mid].price;
 
             if price == mid_price {
-                levels[mid].volume += order.base_lots;
+                levels[mid].volume += order.base_lots - order.filled_base_lots;
                 levels[mid].orders.push(order);
                 return;
             } else {
@@ -88,7 +88,7 @@ impl SpotMarket {
             left,
             Level {
                 price,
-                volume: order.base_lots,
+                volume: order.base_lots - order.filled_base_lots,
                 orders: vec![order],
                 cancelled: 0,
             },
@@ -496,8 +496,8 @@ impl SpotMarket {
                     let result = Self::execute_limit(
                         &mut self.asks_levels,
                         &mut order,
-                        quote_asset,
                         base_asset,
+                        quote_asset,
                         true,
                         precision,
                         |a, b| b.partial_cmp(&a).unwrap(),
@@ -526,8 +526,8 @@ impl SpotMarket {
                     let result = Self::execute_limit(
                         &mut self.bids_levels,
                         &mut order,
-                        base_asset,
                         quote_asset,
+                        base_asset,
                         false,
                         precision,
                         |a, b| a.partial_cmp(&b).unwrap(),
@@ -693,13 +693,13 @@ mod tests {
 
         mod test_execution {
             use crate::state::{
-                order::OrderDirection,
+                order::{OrderDirection, OrderStatus},
                 spot_clearinghouse::MarketPrecision,
                 spot_market::{SpotMarket, tests::make_order},
             };
 
             #[test]
-            fn test_add_buy_order_above_best_ask_price_fully_filled() {
+            fn test_add_buy_above_best_ask_price_fully_filled() {
                 let base_asset = 0;
                 let quote_asset = 1;
                 let tick = 100;
@@ -785,6 +785,10 @@ mod tests {
                     // filled quote size should be 0 to calculate token changes
                     assert_eq!(result.filled_orders[0].filled_base_lots, 0);
                     assert_eq!(result.filled_orders[1].filled_base_lots, 0);
+                    assert_eq!(
+                        result.filled_orders[2].common.status,
+                        OrderStatus::Cancelled
+                    );
 
                     let Some(residual_order) = result.residual_order else {
                         panic!("Expected to have a partial fill");
@@ -794,12 +798,219 @@ mod tests {
                     assert_eq!(residual_order.filled_base_lots, 100);
 
                     let user_execution_result = result.user_order;
-                    println!("{:#?}", user_execution_result);
-                    assert_eq!(user_execution_result.lots_out, 2500 * 1900 + 2550 * 100);
+
+                    let expected_lots_out = 2500 * 1900 + 2550 * 100;
+                    assert_eq!(user_execution_result.lots_out, expected_lots_out);
+
                     assert_eq!(user_execution_result.lots_in, 2000);
-                    assert_eq!(user_execution_result.asset_in, quote_asset);
-                    assert_eq!(user_execution_result.asset_out, base_asset);
+                    assert_eq!(user_execution_result.asset_in, base_asset);
+                    assert_eq!(user_execution_result.asset_out, quote_asset);
                     assert_eq!(user_execution_result.filled_size, 2000);
+                }
+            }
+
+            #[test]
+            fn test_add_buy_above_best_ask_price_partial_filled() {
+                let base_asset = 0;
+                let quote_asset = 1;
+                let tick = 100;
+                let tick_decimals = 2;
+                let mut market = SpotMarket::test_new(tick, tick_decimals);
+                let precision = MarketPrecision {
+                    base_lot_size: 10,
+                    quote_lot_size: 10,
+                    tick,
+                    tick_decimals,
+                };
+
+                // Asks
+
+                market.add_limit_order_helper(
+                    make_order(2_500, 1100, OrderDirection::Sell, 1),
+                    &precision,
+                );
+                market.add_limit_order_helper(
+                    make_order(2_500, 800, OrderDirection::Sell, 2),
+                    &precision,
+                );
+
+                // Cancelled order
+                market.add_limit_order_helper(
+                    make_order(2_550, 1000, OrderDirection::Sell, 3),
+                    &precision,
+                );
+                market.add_limit_order_helper(
+                    make_order(2_550, 600, OrderDirection::Sell, 4),
+                    &precision,
+                );
+
+                market.add_limit_order_helper(
+                    make_order(2_700, 800, OrderDirection::Sell, 5),
+                    &precision,
+                );
+                market.add_limit_order_helper(
+                    make_order(2_800, 400, OrderDirection::Sell, 6),
+                    &precision,
+                );
+
+                market.cancel_order(&make_order(2_550, 1000, OrderDirection::Sell, 3));
+                // Check market state before execution
+                {
+                    assert_eq!(market.get_best_prices().1, Some(2_500));
+                    assert_eq!(market.asks_levels.len(), 4);
+                }
+
+                let order = make_order(2_650, 5_000, OrderDirection::Buy, 7);
+                let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
+
+                let Some(result) = limit_fill_result else {
+                    panic!("Expected to be some result");
+                };
+
+                // Check market state after execution
+                {
+                    assert_eq!(market.asks_levels.len(), 2);
+                    let best_ask_level = market
+                        .asks_levels
+                        .last()
+                        .expect("Level should not be empty");
+                    assert_eq!(best_ask_level.price, 2_700);
+                    assert_eq!(best_ask_level.volume, 800);
+                    assert_eq!(best_ask_level.cancelled, 0);
+
+                    // Order should not be inserted
+                    assert_eq!(market.bids_levels.len(), 1);
+                    assert_eq!(market.bids_levels[0].price, 2_650);
+                    assert_eq!(market.bids_levels[0].volume, 2_500);
+                }
+
+                // Check matching result
+                {
+                    assert_eq!(result.filled_orders.len(), 4);
+                    // filled quote size should be 0 to calculate token changes
+                    assert_eq!(result.filled_orders[0].filled_base_lots, 0);
+                    assert_eq!(result.filled_orders[1].filled_base_lots, 0);
+                    assert_eq!(
+                        result.filled_orders[2].common.status,
+                        OrderStatus::Cancelled
+                    );
+                    assert_eq!(result.filled_orders[3].filled_base_lots, 0);
+
+                    if let Some(_) = result.residual_order {
+                        panic!("Expected to not have a residual order");
+                    };
+
+                    let user_execution_result = result.user_order;
+
+                    let expected_lots_out = 2_500 * 1_900 + 2_550 * 600;
+                    assert_eq!(user_execution_result.lots_out, expected_lots_out);
+
+                    assert_eq!(user_execution_result.lots_in, 2_500);
+                    assert_eq!(user_execution_result.asset_in, base_asset);
+                    assert_eq!(user_execution_result.asset_out, quote_asset);
+                    assert_eq!(user_execution_result.filled_size, 2_500);
+                }
+            }
+
+            #[test]
+            fn test_add_buy_above_best_ask_price_fully_consume_book() {
+                let base_asset = 0;
+                let quote_asset = 1;
+                let tick = 100;
+                let tick_decimals = 2;
+                let mut market = SpotMarket::test_new(tick, tick_decimals);
+                let precision = MarketPrecision {
+                    base_lot_size: 10,
+                    quote_lot_size: 10,
+                    tick,
+                    tick_decimals,
+                };
+
+                // Asks
+
+                market.add_limit_order_helper(
+                    make_order(2_500, 1100, OrderDirection::Sell, 1),
+                    &precision,
+                );
+                market.add_limit_order_helper(
+                    make_order(2_500, 800, OrderDirection::Sell, 2),
+                    &precision,
+                );
+
+                // Cancelled order
+                market.add_limit_order_helper(
+                    make_order(2_550, 1000, OrderDirection::Sell, 3),
+                    &precision,
+                );
+                market.add_limit_order_helper(
+                    make_order(2_550, 600, OrderDirection::Sell, 4),
+                    &precision,
+                );
+
+                // Cancelled order
+                market.add_limit_order_helper(
+                    make_order(2_600, 800, OrderDirection::Sell, 5),
+                    &precision,
+                );
+                market.add_limit_order_helper(
+                    make_order(2_700, 400, OrderDirection::Sell, 6),
+                    &precision,
+                );
+
+                market.cancel_order(&make_order(2_550, 1000, OrderDirection::Sell, 3));
+                // Check market state before execution
+                {
+                    assert_eq!(market.get_best_prices().1, Some(2_500));
+                    assert_eq!(market.asks_levels.len(), 4);
+                    // Check state of the level that limit order will fill to
+                }
+
+                // fully consume the order book
+                let order = make_order(3_550, 4_000, OrderDirection::Buy, 7);
+                let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
+
+                let Some(result) = limit_fill_result else {
+                    panic!("Expected to be some result");
+                };
+
+                // Check market state
+                {
+                    // Should have no asks
+                    assert_eq!(market.asks_levels.len(), 0);
+
+                    // Buy order should have been inserted
+                    assert_eq!(market.bids_levels.len(), 1);
+                    assert_eq!(market.bids_levels[0].volume, 300);
+                    assert_eq!(market.bids_levels[0].price, 3_550);
+                }
+
+                // Check matching result
+                {
+                    assert_eq!(result.filled_orders.len(), 6);
+                    // filled quote size should be 0 to calculate token changes
+                    assert_eq!(result.filled_orders[0].filled_base_lots, 0);
+                    assert_eq!(result.filled_orders[1].filled_base_lots, 0);
+                    assert_eq!(
+                        result.filled_orders[2].common.status,
+                        OrderStatus::Cancelled
+                    );
+                    assert_eq!(result.filled_orders[3].filled_base_lots, 0);
+                    assert_eq!(result.filled_orders[4].filled_base_lots, 0);
+                    assert_eq!(result.filled_orders[5].filled_base_lots, 0);
+
+                    if let Some(_) = result.residual_order {
+                        panic!("Expected to have no residual order");
+                    };
+
+                    let user_execution_result = result.user_order;
+
+                    let expected_lots_out = 2_500 * 1_900 + 2_550 * 600 + 2_600 * 800 + 2_700 * 400;
+                    assert_eq!(user_execution_result.lots_out, expected_lots_out);
+
+                    assert_eq!(user_execution_result.lots_in, 3_700);
+                    assert_eq!(user_execution_result.asset_in, base_asset);
+                    assert_eq!(user_execution_result.asset_out, quote_asset);
+                    assert_eq!(user_execution_result.filled_size, 3_700);
                 }
             }
         }
