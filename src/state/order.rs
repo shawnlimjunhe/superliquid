@@ -196,19 +196,19 @@ pub struct LimitFillResult {
 }
 
 pub enum MarketOrderMatchingResults {
-    SellInQuote {
+    Sell {
         order_id: OrderId,
         base_filled_lots: u64,
         quote_lots_in: u64,
         filled_orders: Vec<LimitOrder>,
-        counterparty_partial_fill: Option<ResidualOrder>,
+        residual_order: Option<ResidualOrder>,
     },
-    BuyInBase {
+    Buy {
         order_id: OrderId,
-        quote_filled_amount: u64,
+        quote_filled_lots: u64,
         base_lots_in: u64,
         filled_orders: Vec<LimitOrder>,
-        counterparty_partial_fill: Option<ResidualOrder>,
+        residual_order: Option<ResidualOrder>,
     },
 }
 pub enum OrderChange {

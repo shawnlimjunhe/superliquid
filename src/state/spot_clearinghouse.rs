@@ -500,12 +500,12 @@ impl SpotClearingHouse {
 
                 // Settlement
                 match results {
-                    MarketOrderMatchingResults::SellInQuote {
+                    MarketOrderMatchingResults::Sell {
                         order_id,
                         base_filled_lots: quote_filled_amount,
                         quote_lots_in: base_amount_in,
                         filled_orders,
-                        counterparty_partial_fill,
+                        residual_order: counterparty_partial_fill,
                     } => {
                         let quote_token_balance =
                             Self::get_account_token_balance_mut(account_balance, quote_asset);
@@ -583,12 +583,12 @@ impl SpotClearingHouse {
                             }),
                         });
                     }
-                    MarketOrderMatchingResults::BuyInBase {
+                    MarketOrderMatchingResults::Buy {
                         order_id,
-                        quote_filled_amount: base_filled_amount,
+                        quote_filled_lots: base_filled_amount,
                         filled_orders,
                         base_lots_in: quote_amount_in,
-                        counterparty_partial_fill,
+                        residual_order: counterparty_partial_fill,
                     } => {
                         let base_token_balance =
                             Self::get_account_token_balance_mut(account_balance, market.base_asset);
