@@ -129,7 +129,8 @@ impl LedgerState {
     }
 
     pub(crate) fn get_account_spot_balances(&self, public_key: &PublicKeyHash) -> AccountBalance {
-        self.spot_clearinghouse.get_account_balance(public_key)
+        self.spot_clearinghouse
+            .get_account_balance_or_default(public_key)
     }
 
     fn get_order_position_from_open_orders(

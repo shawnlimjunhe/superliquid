@@ -220,6 +220,7 @@ impl SpotMarket {
                     for order in level.orders.iter_mut() {
                         if order.common.status == OrderStatus::Cancelled {
                             cancelled_seen += 1;
+                            to_drain_end_index += 1;
                             continue;
                         }
 
@@ -237,7 +238,6 @@ impl SpotMarket {
                                 base_to_quote_lots(curr_filled_base_amount, level_price, precision);
                         }
 
-                        to_drain_end_index += 1;
                         if curr_filled_base_amount == order_remaining {
                             // Include current index
                             to_drain_end_index += 1;
@@ -326,6 +326,7 @@ impl SpotMarket {
             for order in level.orders.iter_mut() {
                 if order.common.status == OrderStatus::Cancelled {
                     level_cancelled += 1;
+                    to_drain_end_index += 1;
                     continue;
                 }
 
@@ -344,7 +345,6 @@ impl SpotMarket {
                 // Don't modify the order's filled amount here as we are using it
                 // to determine the filled amount when settling the order
 
-                to_drain_end_index += 1;
                 if filled_base_lots == order_base_remaining {
                     // Include the current index
                     to_drain_end_index += 1;
@@ -416,6 +416,7 @@ impl SpotMarket {
             for order in level.orders.iter_mut() {
                 if order.common.status == OrderStatus::Cancelled {
                     cancelled_seen += 1;
+                    to_drain_end_index += 1;
                     continue;
                 }
                 let order_remaining = order.base_lots - order.filled_base_lots;
@@ -426,7 +427,6 @@ impl SpotMarket {
 
                 base_amount_in += base_to_quote_lots(filled_quote_amount, level_price, precision);
 
-                to_drain_end_index += 1;
                 if filled_quote_amount == order_remaining {
                     // include current index
                     to_drain_end_index += 1;
@@ -597,6 +597,7 @@ mod tests {
             },
         }
     }
+
     fn make_market_buy_order(id: OrderId, quote_size: u64) -> MarketOrder {
         MarketOrder::Buy(MarketBuyOrder {
             quote_size,
@@ -1497,7 +1498,6 @@ mod tests {
 
             market.cancel_order(&new_limit(1000, 8, OrderDirection::Sell, 5));
             let price_level = &market.asks_levels[0];
-            println!("{:?}", price_level.orders);
             assert_eq!(price_level.orders.len(), 4);
             assert_eq!(price_level.orders[1].common.status, OrderStatus::Cancelled);
             assert_eq!(price_level.cancelled, 1);
