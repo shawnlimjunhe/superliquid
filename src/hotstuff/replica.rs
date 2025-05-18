@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -56,7 +56,7 @@ pub struct HotStuffReplica {
     generic_qc: Arc<QuorumCertificate>,
     locked_qc: Arc<QuorumCertificate>,
 
-    current_proposal: Option<Arc<Block>>,
+    current_proposal: Option<Arc<RwLock<Block>>>,
     mempool: PriorityMempool,
     pending_transactions: HashMap<Sha256Hash, SignedTransaction>,
     committed_transactions: HashMap<Sha256Hash, SignedTransaction>,
@@ -67,7 +67,7 @@ pub struct HotStuffReplica {
     pub rep_node_channel: ReplicaSender,
 
     // State
-    blockstore: HashMap<BlockHash, Arc<Block>>,
+    blockstore: HashMap<BlockHash, Arc<RwLock<Block>>>,
     ledger_state: LedgerState,
 
     view_progress: ViewProgress,
@@ -82,8 +82,11 @@ impl HotStuffReplica {
         let signing_key = config::retrieve_signing_key_checked(node_id);
 
         let (genesis_block, genesis_qc) = Block::create_genesis_block();
-        let mut blockstore: HashMap<BlockHash, Arc<Block>> = HashMap::new();
-        blockstore.insert(genesis_block.hash(), Arc::new(genesis_block.clone()));
+        let mut blockstore: HashMap<BlockHash, Arc<RwLock<Block>>> = HashMap::new();
+        blockstore.insert(
+            genesis_block.hash(),
+            Arc::new(RwLock::new(genesis_block.clone())),
+        );
 
         let genesis_qc = Arc::new(genesis_qc);
         HotStuffReplica {
@@ -231,7 +234,7 @@ impl HotStuffReplica {
         return outbound_msg;
     }
 
-    fn get_justified_block(&self, block: Arc<Block>) -> Option<Arc<Block>> {
+    fn get_justified_block(&self, block: &Block) -> Option<Arc<RwLock<Block>>> {
         let hash = match &*block {
             Block::Normal { justify, .. } => &justify.block_hash,
             Block::Genesis { .. } => return None,
@@ -241,9 +244,10 @@ impl HotStuffReplica {
 
     fn get_justifed_block_and_qc(
         &self,
-        block: Arc<Block>,
-    ) -> (Option<Arc<Block>>, Option<QuorumCertificate>) {
-        let justify = match &*block {
+        block: Arc<RwLock<Block>>,
+    ) -> (Option<Arc<RwLock<Block>>>, Option<QuorumCertificate>) {
+        let binding = block.read().unwrap();
+        let justify = match &*binding {
             Block::Normal { justify, .. } => justify,
             Block::Genesis { .. } => return (None, None),
         };
@@ -252,7 +256,7 @@ impl HotStuffReplica {
         (child_block, Some(justify.clone()))
     }
 
-    fn is_parent(&self, block_child: Arc<Block>, block_parent: Arc<Block>) -> bool {
+    fn is_parent(&self, block_child: &Block, block_parent: &Block) -> bool {
         match *block_child {
             Block::Genesis { .. } => false,
             Block::Normal { parent_id, .. } => block_parent.hash() == parent_id,
@@ -338,15 +342,16 @@ impl HotStuffReplica {
 
             let curr_view = self.pacemaker.curr_view;
             let new_block = Block::create_leaf(
-                &parent,
+                &parent.read().unwrap(),
                 selected_transactions.clone(),
                 curr_view,
                 (*self.generic_qc).clone(),
             );
 
             let sending_block = new_block.clone();
-            let new_block = Arc::new(new_block);
-            self.blockstore.insert(new_block.hash(), new_block.clone());
+            let new_block = Arc::new(RwLock::new(new_block));
+            self.blockstore
+                .insert(new_block.read().unwrap().hash(), new_block.clone());
 
             self.current_proposal = Some(new_block);
             // replica_debug!(
@@ -412,8 +417,9 @@ impl HotStuffReplica {
             return None;
         }
         // b*
-        let b_star = Arc::new(node);
-        self.blockstore.insert(b_star.hash(), b_star.clone());
+        let b_star = Arc::new(RwLock::new(node));
+        self.blockstore
+            .insert(b_star.read().unwrap().hash(), b_star.clone());
 
         // b″ := b*.justify.node
         let (Some(b_double_prime), Some(b_star_justify)) =
@@ -433,18 +439,18 @@ impl HotStuffReplica {
 
         let is_safe = {
             // This scope ends after the function call
-            self.safe_node(&b_star, &b_star_justify)
+            self.safe_node(&b_star.read().unwrap(), &b_star_justify)
         };
 
         let is_valid_sig = { b_star_justify.verify(&self.validator_set, self.quorum_threshold()) };
 
         if is_safe && is_valid_sig {
-            let block_merkle_root = b_star.hash_block_transaction();
-            if block_merkle_root != b_star.merkle_root() {
+            let block_merkle_root = b_star.read().unwrap().hash_block_transaction();
+            if block_merkle_root != b_star.read().unwrap().merkle_root() {
                 return None;
             }
-            outbound_msg = Some(self.vote_message(&b_star));
-            self.add_block_transactions_to_pending(&b_star);
+            outbound_msg = Some(self.vote_message(&b_star.read().unwrap()));
+            self.add_block_transactions_to_pending(&b_star.read().unwrap());
             // replica_debug!(
             //     self.node_id,
             //     self.pacemaker.curr_view,
@@ -455,7 +461,7 @@ impl HotStuffReplica {
             return outbound_msg;
         }
 
-        if !self.is_parent(b_star, b_double_prime.clone()) {
+        if !self.is_parent(&b_star.read().unwrap(), &b_double_prime.read().unwrap()) {
             return outbound_msg;
         }
         self.generic_qc = b_star_justify.clone();
@@ -482,7 +488,7 @@ impl HotStuffReplica {
 
         let b_double_prime_justify = Arc::new(b_double_prime_justify.clone());
 
-        if !self.is_parent(b_double_prime, b_prime.clone()) {
+        if !self.is_parent(&b_double_prime.read().unwrap(), &b_prime.read().unwrap()) {
             return outbound_msg;
         }
 
@@ -492,7 +498,7 @@ impl HotStuffReplica {
 
         // b := b′.justify.node
         let commited_block = {
-            let Some(b) = self.get_justified_block(b_prime.clone()) else {
+            let Some(b) = self.get_justified_block(&b_prime.read().unwrap()) else {
                 // replica_debug!(
                 //     self.node_id,
                 //     self.pacemaker.curr_view,
@@ -501,7 +507,7 @@ impl HotStuffReplica {
                 return outbound_msg;
             };
 
-            if !self.is_parent(b_prime, b.clone()) {
+            if !self.is_parent(&b_prime.read().unwrap(), &b.read().unwrap()) {
                 return outbound_msg;
             }
             b
@@ -514,9 +520,11 @@ impl HotStuffReplica {
         //     "Applying transaction, {:?}",
         //     &commited_block.transactions()
         // );
-        let account_nonces = self.ledger_state.apply_block(&commited_block);
-        self.remove_block_transactions_from_pending(&commited_block);
-        self.add_block_transactions_to_committed(&commited_block);
+        let account_nonces = self
+            .ledger_state
+            .apply_block(&mut commited_block.write().unwrap());
+        self.remove_block_transactions_from_pending(&commited_block.read().unwrap());
+        self.add_block_transactions_to_committed(&commited_block.read().unwrap());
         self.mempool.update_after_execution(account_nonces);
 
         return outbound_msg;

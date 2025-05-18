@@ -12,9 +12,17 @@ use crate::{
         asset::AssetId,
         order::{OrderDirection, OrderType},
         spot_clearinghouse::MarketId,
-        state::Nonce,
+        state::{ExecError, Nonce},
     },
 };
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum TransactionStatus {
+    Executed,
+    Rejected(String),
+    Error(ExecError),
+    Pending,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UnsignedTransaction {
@@ -61,6 +69,7 @@ impl UnsignedTransaction {
             tx: self,
             signature,
             hash: transaction_hash,
+            status: TransactionStatus::Pending,
         }
     }
 }
@@ -78,6 +87,7 @@ pub struct SignedTransaction {
     pub tx: UnsignedTransaction,
     pub signature: SignatureString,
     pub hash: Sha256Hash,
+    pub status: TransactionStatus,
 }
 
 impl SignedTransaction {

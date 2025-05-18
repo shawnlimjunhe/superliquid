@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, vec};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock, RwLockReadGuard},
+    vec,
+};
 
 use crate::types::transaction::{Sha256Hash, SignedTransaction};
 use serde::{Deserialize, Serialize};
@@ -56,9 +60,10 @@ impl Block {
     pub fn extends_from(
         &self,
         locked_block_hash: BlockHash,
-        block_store: &HashMap<BlockHash, Arc<Block>>,
+        block_store: &HashMap<BlockHash, Arc<RwLock<Block>>>,
     ) -> bool {
         let mut current = self;
+        let mut parent: RwLockReadGuard<'_, Block>;
 
         // check 3 parents up
         for _ in 0..3 {
@@ -70,12 +75,15 @@ impl Block {
                     if *parent_id == locked_block_hash {
                         return true;
                     }
-                    current = match block_store.get(parent_id) {
-                        Some(node) => node,
+                    let temp = match block_store.get(parent_id) {
+                        Some(node) => node.read().unwrap(),
                         None => {
                             return false;
                         } // missing parent, unsafe
                     };
+
+                    parent = temp;
+                    current = &parent;
                 }
             }
         }
