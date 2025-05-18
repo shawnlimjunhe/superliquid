@@ -499,48 +499,72 @@ impl SpotClearingHouse {
                     return None;
                 };
 
+                let lock_amount;
                 // Check available balance
                 match &market_order {
                     MarketOrder::Sell(sell_order) => {
-                        let quote_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
-                        if quote_token_balance.available_balance < sell_order.base_size as u128 {
-                            println!("Not enough balance");
-                        }
-                        quote_token_balance.available_balance -= sell_order.base_size as u128;
-                    }
-                    MarketOrder::Buy(buy_order) => {
                         let base_token_balance =
                             Self::get_account_token_balance_mut(account_balance, market.base_asset);
-                        if base_token_balance.available_balance < buy_order.quote_size as u128 {
+
+                        let base_needed =
+                            sell_order.base_size as u128 * precision.base_lot_size as u128;
+
+                        if base_token_balance.available_balance < base_needed {
                             println!("Not enough balance");
                         }
-                        base_token_balance.available_balance -= buy_order.quote_size as u128;
+
+                        base_token_balance.available_balance -= base_needed;
+                        lock_amount = base_needed;
+                    }
+                    MarketOrder::Buy(buy_order) => {
+                        let quote_token_balance = Self::get_account_token_balance_mut(
+                            account_balance,
+                            market.quote_asset,
+                        );
+
+                        let quote_needed =
+                            buy_order.quote_size as u128 * precision.quote_lot_size as u128;
+                        if quote_token_balance.available_balance < quote_needed {
+                            println!("Not enough balance");
+                        }
+                        quote_token_balance.available_balance -= quote_needed;
+                        lock_amount = quote_needed;
                     }
                 };
 
                 let results = market.handle_market_order(market_order, precision);
                 let base_asset = market.base_asset;
-                let quote_asset = market.base_asset;
+                let quote_asset = market.quote_asset;
 
                 // Settlement
                 match results {
                     MarketOrderMatchingResults::Sell {
                         order_id,
-                        base_filled_lots: quote_filled_amount,
-                        quote_lots_in: base_amount_in,
+                        base_filled_lots,
+                        quote_lots_in,
                         filled_orders,
                         residual_order: counterparty_partial_fill,
                     } => {
-                        let quote_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, quote_asset);
-                        quote_token_balance.total_balance -= quote_filled_amount as u128;
                         let base_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, base_asset);
-                        base_token_balance.total_balance += base_amount_in as u128;
-                        base_token_balance.available_balance += base_amount_in as u128;
+                            Self::get_account_token_balance_mut(account_balance, quote_asset);
 
-                        let average_execution_price = quote_filled_amount / base_amount_in;
+                        // unlock the balance to handle partial order fill
+                        base_token_balance.available_balance += lock_amount;
+
+                        let base_filled_amount =
+                            base_filled_lots as u128 * precision.base_lot_size as u128;
+                        base_token_balance.total_balance -= base_filled_amount;
+                        base_token_balance.available_balance -= base_filled_amount;
+
+                        let quote_token_balance =
+                            Self::get_account_token_balance_mut(account_balance, base_asset);
+
+                        let quote_amount_in =
+                            quote_lots_in as u128 * precision.quote_lot_size as u128;
+                        quote_token_balance.total_balance += quote_amount_in;
+                        quote_token_balance.available_balance += quote_amount_in;
+
+                        let average_execution_price = quote_lots_in / base_filled_lots;
 
                         for filled_order in filled_orders.iter() {
                             if filled_order.common.status == OrderStatus::Cancelled {
@@ -549,29 +573,36 @@ impl SpotClearingHouse {
                             // Buy orders
                             let account_balance =
                                 self.get_account_balance_mut(&filled_order.common.account);
-                            let filled_quote_amount =
+                            let filled_base_lots =
                                 filled_order.base_lots - filled_order.filled_base_lots;
+
+                            let base_amount_in =
+                                filled_base_lots as u128 * precision.base_lot_size as u128;
 
                             let base_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, base_asset);
-                            base_token_balance.total_balance -= base_to_quote_lots(
-                                filled_quote_amount,
+
+                            base_token_balance.total_balance += base_amount_in;
+                            base_token_balance.available_balance += base_amount_in;
+
+                            let quote_lots_out = base_to_quote_lots(
+                                filled_base_lots,
                                 filled_order.price_multiple,
                                 precision,
-                            )
-                                as u128;
+                            ) as u128;
 
+                            let quote_amount_out =
+                                quote_lots_out as u128 * precision.quote_lot_size as u128;
                             let quote_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, quote_asset);
 
-                            quote_token_balance.available_balance += filled_quote_amount as u128;
-                            quote_token_balance.total_balance += filled_quote_amount as u128;
+                            quote_token_balance.total_balance += quote_amount_out;
                         }
                         match &counterparty_partial_fill {
                             Some(counter_partial_fill) => {
                                 let ResidualOrder {
                                     account_public_key,
-                                    filled_base_lots: filled_quote_lots,
+                                    filled_base_lots,
                                     price_multiple: order_price,
                                     ..
                                 } = counter_partial_fill;
@@ -583,17 +614,23 @@ impl SpotClearingHouse {
                                     account_balance,
                                     base_asset,
                                 );
-                                base_token_balance.total_balance -=
-                                    base_to_quote_lots(*filled_quote_lots, *order_price, precision)
+
+                                let base_amount =
+                                    *filled_base_lots as u128 * precision.base_lot_size as u128;
+                                base_token_balance.total_balance += base_amount;
+                                base_token_balance.available_balance += base_amount;
+
+                                let quote_lots =
+                                    base_to_quote_lots(*filled_base_lots, *order_price, precision)
                                         as u128;
+                                let quote_amount = quote_lots * precision.quote_lot_size as u128;
 
                                 let quote_token_balance = Self::get_account_token_balance_mut(
                                     account_balance,
                                     quote_asset,
                                 );
 
-                                quote_token_balance.available_balance += *filled_quote_lots as u128;
-                                quote_token_balance.total_balance += *filled_quote_lots as u128;
+                                quote_token_balance.total_balance -= quote_amount;
                             }
                             None => {}
                         }
@@ -603,28 +640,40 @@ impl SpotClearingHouse {
                             residual_order: counterparty_partial_fill,
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
-                                filled_lots: quote_filled_amount,
+                                filled_lots: base_filled_lots,
                                 average_execution_price: average_execution_price,
                             }),
                         });
                     }
                     MarketOrderMatchingResults::Buy {
                         order_id,
-                        quote_filled_lots: base_filled_amount,
+                        quote_filled_lots,
                         filled_orders,
-                        base_lots_in: quote_amount_in,
+                        base_lots_in,
                         residual_order: counterparty_partial_fill,
                     } => {
+                        let quote_token_balance = Self::get_account_token_balance_mut(
+                            account_balance,
+                            market.quote_asset,
+                        );
+
+                        // unlock the balance to handle partial order fill
+                        quote_token_balance.available_balance += lock_amount;
+
+                        let quote_amount =
+                            quote_filled_lots as u128 + precision.quote_lot_size as u128;
+
+                        quote_token_balance.total_balance -= quote_amount;
+                        quote_token_balance.available_balance -= quote_amount;
+
                         let base_token_balance =
                             Self::get_account_token_balance_mut(account_balance, market.base_asset);
-                        base_token_balance.total_balance -= base_filled_amount as u128;
 
-                        let quote_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, market.base_asset);
-                        quote_token_balance.total_balance += quote_amount_in as u128;
-                        quote_token_balance.available_balance += quote_amount_in as u128;
+                        let base_amount = base_lots_in as u128 * precision.base_lot_size as u128;
+                        base_token_balance.total_balance += base_amount;
+                        base_token_balance.available_balance += base_amount;
 
-                        let average_execution_price = quote_amount_in / base_filled_amount;
+                        let average_execution_price = quote_filled_lots / base_lots_in;
 
                         for filled_order in filled_orders.iter() {
                             if filled_order.common.status == OrderStatus::Cancelled {
@@ -633,29 +682,35 @@ impl SpotClearingHouse {
                             // Sell orders
                             let account_balance =
                                 self.get_account_balance_mut(&filled_order.common.account);
-                            let filled_quote_amount =
+                            let filled_base_lots =
                                 filled_order.base_lots - filled_order.filled_base_lots;
+                            let base_amount =
+                                filled_base_lots as u128 * precision.base_lot_size as u128;
 
                             let base_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, base_asset);
-                            let filled_base_amount = base_to_quote_lots(
-                                filled_quote_amount,
+
+                            base_token_balance.total_balance -= base_amount;
+                            let filled_quote_lots = base_to_quote_lots(
+                                filled_base_lots,
                                 filled_order.price_multiple,
                                 precision,
                             ) as u128;
-                            base_token_balance.total_balance += filled_base_amount;
-                            base_token_balance.available_balance += filled_base_amount;
+
+                            let quote_amount: u128 =
+                                filled_quote_lots * precision.quote_lot_size as u128;
 
                             let quote_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, quote_asset);
 
-                            quote_token_balance.total_balance -= filled_quote_amount as u128;
+                            quote_token_balance.total_balance += quote_amount;
+                            quote_token_balance.available_balance += quote_amount;
                         }
                         match &counterparty_partial_fill {
                             Some(counter_partial_fill) => {
                                 let ResidualOrder {
                                     account_public_key,
-                                    filled_base_lots: filled_quote_lots,
+                                    filled_base_lots,
                                     price_multiple: order_price,
                                     ..
                                 } = counter_partial_fill;
@@ -663,22 +718,30 @@ impl SpotClearingHouse {
                                 let account_balance =
                                     self.get_account_balance_mut(&account_public_key);
 
+                                let base_amount =
+                                    *filled_base_lots as u128 * precision.base_lot_size as u128;
+
                                 let base_token_balance = Self::get_account_token_balance_mut(
                                     account_balance,
                                     base_asset,
                                 );
-                                let filled_base_lots =
-                                    base_to_quote_lots(*filled_quote_lots, *order_price, precision)
+
+                                base_token_balance.total_balance -= base_amount;
+
+                                let quote_out_lots =
+                                    base_to_quote_lots(*filled_base_lots, *order_price, precision)
                                         as u128;
-                                base_token_balance.total_balance += filled_base_lots;
-                                base_token_balance.available_balance += filled_base_lots;
+                                let quote_amount =
+                                    quote_out_lots * precision.quote_lot_size as u128;
 
                                 let quote_token_balance = Self::get_account_token_balance_mut(
                                     account_balance,
                                     quote_asset,
                                 );
 
-                                quote_token_balance.total_balance -= *filled_quote_lots as u128;
+                                quote_token_balance.total_balance += quote_amount;
+
+                                quote_token_balance.available_balance -= quote_amount;
                             }
                             None => {}
                         }
@@ -687,7 +750,7 @@ impl SpotClearingHouse {
                             residual_order: counterparty_partial_fill,
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
-                                filled_lots: base_filled_amount,
+                                filled_lots: quote_filled_lots,
                                 average_execution_price: average_execution_price,
                             }),
                         });
@@ -702,7 +765,8 @@ impl SpotClearingHouse {
 mod tests {
     use crate::{
         state::order::{
-            CommonOrderFields, LimitOrder, Order, OrderDirection, OrderId, OrderStatus,
+            CommonOrderFields, LimitOrder, MarketBuyOrder, MarketOrder, MarketSellOrder, Order,
+            OrderDirection, OrderId, OrderStatus,
         },
         types::transaction::PublicKeyHash,
     };
@@ -728,6 +792,36 @@ mod tests {
                 direction,
             },
         }
+    }
+
+    fn new_market_buy(id: OrderId, quote_size: u64, account: PublicKeyHash) -> MarketOrder {
+        MarketOrder::Buy(MarketBuyOrder {
+            quote_size,
+            filled_size: 0,
+            average_execution_price: 0,
+            common: CommonOrderFields {
+                id,
+                market_id: 0,
+                status: OrderStatus::Open,
+                account,
+                direction: OrderDirection::Buy,
+            },
+        })
+    }
+
+    fn new_market_sell(id: OrderId, base_size: u64, account: PublicKeyHash) -> MarketOrder {
+        MarketOrder::Sell(MarketSellOrder {
+            base_size,
+            filled_size: 0,
+            average_execution_price: 0,
+            common: CommonOrderFields {
+                id,
+                market_id: 0,
+                status: OrderStatus::Open,
+                account,
+                direction: OrderDirection::Sell,
+            },
+        })
     }
 
     fn test_setup(
@@ -868,10 +962,7 @@ mod tests {
         (spot_clearinghouse, precision)
     }
     mod test_limit_execution_side_effects {
-        use crate::state::{
-            order::{Order, OrderDirection},
-            spot_clearinghouse,
-        };
+        use crate::state::order::{Order, OrderDirection};
 
         use super::{new_limit, test_setup};
 
@@ -1349,5 +1440,480 @@ mod tests {
         }
     }
 
-    mod test_market_execution_side_effects {}
+    mod test_market_execution_side_effects {
+        use crate::state::order::{Order, OrderDirection};
+
+        use super::{new_market_buy, new_market_sell, test_setup};
+
+        #[test]
+        fn test_market_buy() {
+            let user_public_key = [0; 32];
+            let maker_one_public_key = [1; 32];
+            let maker_two_public_key = [2; 32];
+            let (mut spot_clearinghouse, precision) =
+                test_setup(user_public_key, maker_one_public_key, maker_two_public_key);
+
+            let buy = new_market_buy(10, 2_500_500, user_public_key);
+            spot_clearinghouse.handle_order(Order::Market(buy), &precision);
+
+            // asset user state
+            {
+                // Check account state
+                let user_balance =
+                    spot_clearinghouse.get_account_balance_or_default(&user_public_key);
+                let user_base_balance = user_balance.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+                let user_quote_balance = user_balance.asset_balances.get(1).unwrap();
+
+                let expected_base_increase = (1_000 * precision.base_lot_size) as u128;
+                assert_eq!(
+                    user_base_balance.total_balance,
+                    1_000_000_000 + expected_base_increase
+                );
+                assert_eq!(
+                    user_base_balance.available_balance,
+                    1_000_000_000 + expected_base_increase
+                );
+
+                let expected_quote_decrease = (2_500 * 1_000) * precision.quote_lot_size as u128;
+                assert_eq!(
+                    user_quote_balance.total_balance,
+                    1_000_000_000_000 - expected_quote_decrease
+                );
+                assert_eq!(
+                    user_quote_balance.available_balance,
+                    1_000_000_000_000u128 - expected_quote_decrease
+                ); // Quote balance should decrease
+            }
+            // Check maker state
+            {
+                // MM 1
+                // Asset base balance
+                let mm_one =
+                    spot_clearinghouse.get_account_balance_or_default(&maker_one_public_key);
+                let base_balance = mm_one.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_balance = 1_000_000_000;
+                let initial_available =
+                    (1_000_000_000 - ((600 + 700 + 300) * precision.base_lot_size)) as u128;
+
+                let expected_base_decrease = (600 * precision.base_lot_size) as u128;
+
+                assert_eq!(
+                    base_balance.total_balance,
+                    initial_balance - expected_base_decrease
+                );
+                assert_eq!(base_balance.available_balance, initial_available);
+
+                // Quote balance
+                let quote_balance = mm_one.asset_balances.get(1).unwrap();
+                let initial_balance = 1_000_000_000_000;
+                let initial_available = 1_000_000_000_000u128
+                    - (2_200 * 700 + 2_450 * 1_000) * precision.quote_lot_size as u128;
+
+                let expected_quote_increase = (600 * 2500 * precision.quote_lot_size) as u128;
+
+                assert_eq!(
+                    quote_balance.total_balance,
+                    initial_balance + expected_quote_increase
+                );
+                assert_eq!(
+                    quote_balance.available_balance,
+                    initial_available + expected_quote_increase
+                );
+            }
+
+            {
+                // MM 2
+                // Assert base balance
+                let mm_two = spot_clearinghouse
+                    .get_account_balance(&maker_two_public_key)
+                    .unwrap();
+                let mm_two_base_balance = mm_two.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_total = 1_000_000_000;
+                let initial_avail =
+                    (1_000_000_000 - (1_000 + 1_200) * precision.base_lot_size) as u128;
+
+                let expected_base_decrease = (400) * precision.base_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_base_balance.total_balance,
+                    initial_total - expected_base_decrease
+                );
+                assert_eq!(mm_two_base_balance.available_balance, initial_avail);
+
+                // Assert quote balance
+                let mm_two_quote_balance = mm_two.asset_balances.get(1).unwrap();
+
+                let initial_total = 1_000_000_000_000u128;
+                let initial_avail =
+                    1_000_000_000_000u128 - (2_300 * 1_100) * precision.quote_lot_size as u128;
+
+                let expected_quote_increase = (2500 * 400) * precision.quote_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_quote_balance.total_balance,
+                    initial_total + expected_quote_increase
+                );
+                assert_eq!(
+                    mm_two_quote_balance.available_balance,
+                    initial_avail + expected_quote_increase
+                );
+            }
+        }
+
+        // #[test]
+        fn test_market_buy_consuming_book() {
+            let user_public_key = [0; 32];
+            let maker_one_public_key = [1; 32];
+            let maker_two_public_key = [2; 32];
+            let (mut spot_clearinghouse, precision) =
+                test_setup(user_public_key, maker_one_public_key, maker_two_public_key);
+
+            let buy = new_market_buy(10, 1_800_000, user_public_key);
+            spot_clearinghouse.handle_order(Order::Market(buy), &precision);
+
+            // asset user state
+            {
+                // Check account state
+                let user_balance =
+                    spot_clearinghouse.get_account_balance_or_default(&user_public_key);
+                let user_base_balance = user_balance.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+                let user_quote_balance = user_balance.asset_balances.get(1).unwrap();
+
+                let expected_base_increase = (1_600 * precision.base_lot_size) as u128;
+                assert_eq!(
+                    user_base_balance.total_balance,
+                    1_000_000_000 + expected_base_increase
+                );
+                assert_eq!(
+                    user_base_balance.available_balance,
+                    1_000_000_000 + expected_base_increase
+                );
+
+                let expected_quote_decrease = (2_500 * 1_600) * precision.quote_lot_size as u128;
+                assert_eq!(
+                    user_quote_balance.total_balance,
+                    1_000_000_000_000 - expected_quote_decrease
+                );
+                assert_eq!(
+                    user_quote_balance.available_balance,
+                    1_000_000_000_000u128 - expected_quote_decrease
+                ); // Quote balance should decrease
+            }
+            // Check maker state
+            {
+                // MM 1
+                // Asset base balance
+                let mm_one =
+                    spot_clearinghouse.get_account_balance_or_default(&maker_one_public_key);
+                let base_balance = mm_one.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_balance = 1_000_000_000;
+                let initial_available =
+                    (1_000_000_000 - ((600 + 700 + 300) * precision.base_lot_size)) as u128;
+
+                let expected_base_decrease = (600 * precision.base_lot_size) as u128;
+
+                assert_eq!(
+                    base_balance.total_balance,
+                    initial_balance - expected_base_decrease
+                );
+                assert_eq!(base_balance.available_balance, initial_available);
+
+                // Quote balance
+                let quote_balance = mm_one.asset_balances.get(1).unwrap();
+                let initial_balance = 1_000_000_000_000;
+                let initial_available = 1_000_000_000_000u128
+                    - (2_200 * 700 + 2_450 * 1_000) * precision.quote_lot_size as u128;
+
+                let expected_quote_increase = (600 * 2500 * precision.quote_lot_size) as u128;
+
+                assert_eq!(
+                    quote_balance.total_balance,
+                    initial_balance + expected_quote_increase
+                );
+                assert_eq!(
+                    quote_balance.available_balance,
+                    initial_available + expected_quote_increase
+                );
+            }
+
+            {
+                // MM 2
+                // Assert base balance
+                let mm_two = spot_clearinghouse
+                    .get_account_balance(&maker_two_public_key)
+                    .unwrap();
+                let mm_two_base_balance = mm_two.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_total = 1_000_000_000;
+                let initial_avail =
+                    (1_000_000_000 - (1_000 + 1_200) * precision.base_lot_size) as u128;
+
+                let expected_base_decrease = (1_000) * precision.base_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_base_balance.total_balance,
+                    initial_total - expected_base_decrease
+                );
+                assert_eq!(mm_two_base_balance.available_balance, initial_avail);
+
+                // Assert quote balance
+                let mm_two_quote_balance = mm_two.asset_balances.get(1).unwrap();
+
+                let initial_total = 1_000_000_000_000u128;
+                let initial_avail =
+                    1_000_000_000_000u128 - (2_300 * 1_100) * precision.quote_lot_size as u128;
+
+                let expected_quote_increase = (2500 * 1_000) * precision.quote_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_quote_balance.total_balance,
+                    initial_total + expected_quote_increase
+                );
+                assert_eq!(
+                    mm_two_quote_balance.available_balance,
+                    initial_avail + expected_quote_increase
+                );
+            }
+        }
+
+        // #[test]
+        fn test_market_sell() {
+            let user_public_key = [0; 32];
+            let maker_one_public_key = [1; 32];
+            let maker_two_public_key = [2; 32];
+            let (mut spot_clearinghouse, precision) =
+                test_setup(user_public_key, maker_one_public_key, maker_two_public_key);
+            let sell = new_market_sell(10, 2_200, user_public_key);
+            spot_clearinghouse.handle_order(Order::Market(sell), &precision);
+
+            // asset user state
+            {
+                // Check account state
+                let user_balance =
+                    spot_clearinghouse.get_account_balance_or_default(&user_public_key);
+                let user_base_balance = user_balance.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+                let user_quote_balance = user_balance.asset_balances.get(1).unwrap();
+
+                let expected_base_decrease = (2_200 * precision.base_lot_size) as u128;
+                assert_eq!(
+                    user_base_balance.total_balance,
+                    1_000_000_000 - expected_base_decrease
+                );
+                assert_eq!(
+                    user_base_balance.available_balance,
+                    1_000_000_000 - expected_base_decrease
+                );
+
+                let expected_quote_increase =
+                    (2_450 * 1_000 + 2_300 * 1_100 + 2200 * 100) * precision.quote_lot_size as u128;
+                assert_eq!(
+                    user_quote_balance.total_balance,
+                    1_000_000_000_000 + expected_quote_increase
+                );
+                assert_eq!(
+                    user_quote_balance.available_balance,
+                    1_000_000_000_000u128 + expected_quote_increase
+                ); // Quote balance should decrease
+            }
+            // Check maker state
+            {
+                // MM 1
+                // Asset base balance
+                let mm_one =
+                    spot_clearinghouse.get_account_balance_or_default(&maker_one_public_key);
+                let base_balance = mm_one.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_balance = 1_000_000_000;
+                let initial_available =
+                    (1_000_000_000 - ((600 + 700 + 300) * precision.base_lot_size)) as u128;
+
+                let expected_base_increase = ((1_000 + 100) * precision.base_lot_size) as u128;
+
+                assert_eq!(
+                    base_balance.total_balance,
+                    initial_balance + expected_base_increase
+                );
+                assert_eq!(
+                    base_balance.available_balance,
+                    initial_available + expected_base_increase
+                );
+
+                // Quote balance
+                let quote_balance = mm_one.asset_balances.get(1).unwrap();
+                let initial_balance = 1_000_000_000_000;
+                let initial_available = 1_000_000_000_000u128
+                    - (2_200 * 700 + 2_450 * 1_000) * precision.quote_lot_size as u128;
+
+                let expected_quote_decrease =
+                    ((2450 * 1000 + 2_200 * 100) * precision.quote_lot_size) as u128;
+
+                assert_eq!(
+                    quote_balance.total_balance,
+                    initial_balance - expected_quote_decrease
+                );
+                assert_eq!(quote_balance.available_balance, initial_available);
+            }
+
+            {
+                // MM 2
+                // Assert base balance
+                let mm_two = spot_clearinghouse
+                    .get_account_balance(&maker_two_public_key)
+                    .unwrap();
+                let mm_two_base_balance = mm_two.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_total = 1_000_000_000;
+                let initial_avail =
+                    (1_000_000_000 - (1_000 + 1_200) * precision.base_lot_size) as u128;
+
+                let expected_base_increase = (700 + 400) * precision.base_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_base_balance.total_balance,
+                    initial_total + expected_base_increase
+                );
+                assert_eq!(
+                    mm_two_base_balance.available_balance,
+                    initial_avail + expected_base_increase
+                );
+
+                // Assert quote balance
+                let mm_two_quote_balance = mm_two.asset_balances.get(1).unwrap();
+
+                let initial_total = 1_000_000_000_000u128;
+                let initial_avail =
+                    1_000_000_000_000u128 - (2_300 * 1_100) * precision.quote_lot_size as u128;
+
+                let expected_quote_decrease =
+                    (2300 * 700 + 2_300 * 400) * precision.quote_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_quote_balance.total_balance,
+                    initial_total - expected_quote_decrease
+                );
+                assert_eq!(mm_two_quote_balance.available_balance, initial_avail);
+            }
+        }
+
+        // #[test]
+        fn test_market_sell_consume_book() {
+            let user_public_key = [0; 32];
+            let maker_one_public_key = [1; 32];
+            let maker_two_public_key = [2; 32];
+            let (mut spot_clearinghouse, precision) =
+                test_setup(user_public_key, maker_one_public_key, maker_two_public_key);
+            let sell = new_market_sell(10, 10_000, user_public_key);
+            spot_clearinghouse.handle_order(Order::Market(sell), &precision);
+
+            // asset user state
+            {
+                // Check account state
+                let user_balance =
+                    spot_clearinghouse.get_account_balance_or_default(&user_public_key);
+                let user_base_balance = user_balance.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+                let user_quote_balance = user_balance.asset_balances.get(1).unwrap();
+
+                let expected_base_decrease = (2_100 * precision.base_lot_size) as u128;
+                assert_eq!(
+                    user_base_balance.total_balance,
+                    1_000_000_000 - expected_base_decrease
+                );
+                assert_eq!(
+                    user_base_balance.available_balance,
+                    1_000_000_000 - expected_base_decrease
+                );
+
+                let expected_quote_increase =
+                    (2_450 * 1_000 + 2_300 * 1_100) * precision.quote_lot_size as u128;
+                assert_eq!(
+                    user_quote_balance.total_balance,
+                    1_000_000_000_000 + expected_quote_increase
+                );
+                assert_eq!(
+                    user_quote_balance.available_balance,
+                    1_000_000_000_000u128 + expected_quote_increase
+                ); // Quote balance should decrease
+            }
+            // Check maker state
+            {
+                // MM 1
+                // Asset base balance
+                let mm_one =
+                    spot_clearinghouse.get_account_balance_or_default(&maker_one_public_key);
+                let base_balance = mm_one.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_balance = 1_000_000_000;
+                let initial_available =
+                    (1_000_000_000 - ((600 + 700 + 300) * precision.base_lot_size)) as u128;
+
+                let expected_base_increase = ((1_000) * precision.base_lot_size) as u128;
+
+                assert_eq!(
+                    base_balance.total_balance,
+                    initial_balance + expected_base_increase
+                );
+                assert_eq!(
+                    base_balance.available_balance,
+                    initial_available + expected_base_increase
+                );
+
+                // Quote balance
+                let quote_balance = mm_one.asset_balances.get(1).unwrap();
+                let initial_balance = 1_000_000_000_000;
+                let initial_available = 1_000_000_000_000u128
+                    - (2_200 * 700 + 2_450 * 1_000) * precision.quote_lot_size as u128;
+
+                let expected_quote_decrease = ((2450 * 1000) * precision.quote_lot_size) as u128;
+
+                assert_eq!(
+                    quote_balance.total_balance,
+                    initial_balance - expected_quote_decrease
+                );
+                assert_eq!(quote_balance.available_balance, initial_available);
+            }
+
+            {
+                // MM 2
+                // Assert base balance
+                let mm_two = spot_clearinghouse
+                    .get_account_balance(&maker_two_public_key)
+                    .unwrap();
+                let mm_two_base_balance = mm_two.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
+
+                let initial_total = 1_000_000_000;
+                let initial_avail =
+                    (1_000_000_000 - (1_000 + 1_200) * precision.base_lot_size) as u128;
+
+                let expected_base_increase = (700 + 400) * precision.base_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_base_balance.total_balance,
+                    initial_total + expected_base_increase
+                );
+                assert_eq!(
+                    mm_two_base_balance.available_balance,
+                    initial_avail + expected_base_increase
+                );
+
+                // Assert quote balance
+                let mm_two_quote_balance = mm_two.asset_balances.get(1).unwrap();
+
+                let initial_total = 1_000_000_000_000u128;
+                let initial_avail =
+                    1_000_000_000_000u128 - (2_300 * 1_100) * precision.quote_lot_size as u128;
+
+                let expected_quote_decrease =
+                    (2300 * 700 + 2_300 * 400) * precision.quote_lot_size as u128;
+
+                assert_eq!(
+                    mm_two_quote_balance.total_balance,
+                    initial_total - expected_quote_decrease
+                );
+                assert_eq!(mm_two_quote_balance.available_balance, initial_avail);
+            }
+        }
+    }
 }
