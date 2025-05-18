@@ -500,7 +500,7 @@ impl SpotClearingHouse {
                 };
 
                 let lock_amount;
-                // Check available balance
+                // Check if available amount means order requirements
                 match &market_order {
                     MarketOrder::Sell(sell_order) => {
                         let base_token_balance =
@@ -543,10 +543,11 @@ impl SpotClearingHouse {
                         base_filled_lots,
                         quote_lots_in,
                         filled_orders,
-                        residual_order: counterparty_partial_fill,
+                        residual_order,
                     } => {
+                        // Handle user balance change
                         let base_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, quote_asset);
+                            Self::get_account_token_balance_mut(account_balance, base_asset);
 
                         // unlock the balance to handle partial order fill
                         base_token_balance.available_balance += lock_amount;
@@ -557,7 +558,7 @@ impl SpotClearingHouse {
                         base_token_balance.available_balance -= base_filled_amount;
 
                         let quote_token_balance =
-                            Self::get_account_token_balance_mut(account_balance, base_asset);
+                            Self::get_account_token_balance_mut(account_balance, quote_asset);
 
                         let quote_amount_in =
                             quote_lots_in as u128 * precision.quote_lot_size as u128;
@@ -596,9 +597,9 @@ impl SpotClearingHouse {
                             let quote_token_balance =
                                 Self::get_account_token_balance_mut(account_balance, quote_asset);
 
-                            quote_token_balance.total_balance += quote_amount_out;
+                            quote_token_balance.total_balance -= quote_amount_out;
                         }
-                        match &counterparty_partial_fill {
+                        match &residual_order {
                             Some(counter_partial_fill) => {
                                 let ResidualOrder {
                                     account_public_key,
@@ -608,7 +609,7 @@ impl SpotClearingHouse {
                                 } = counter_partial_fill;
 
                                 let account_balance =
-                                    &mut self.get_account_balance_or_default(&account_public_key);
+                                    self.get_account_balance_mut(&account_public_key);
 
                                 let base_token_balance = Self::get_account_token_balance_mut(
                                     account_balance,
@@ -620,7 +621,7 @@ impl SpotClearingHouse {
                                 base_token_balance.total_balance += base_amount;
                                 base_token_balance.available_balance += base_amount;
 
-                                let quote_lots =
+                                let quote_lots: u128 =
                                     base_to_quote_lots(*filled_base_lots, *order_price, precision)
                                         as u128;
                                 let quote_amount = quote_lots * precision.quote_lot_size as u128;
@@ -637,7 +638,7 @@ impl SpotClearingHouse {
 
                         return Some(ExecutionResults {
                             filled_orders,
-                            residual_order: counterparty_partial_fill,
+                            residual_order,
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
                                 filled_lots: base_filled_lots,
@@ -650,7 +651,7 @@ impl SpotClearingHouse {
                         quote_filled_lots,
                         filled_orders,
                         base_lots_in,
-                        residual_order: counterparty_partial_fill,
+                        residual_order,
                     } => {
                         let quote_token_balance = Self::get_account_token_balance_mut(
                             account_balance,
@@ -660,8 +661,8 @@ impl SpotClearingHouse {
                         // unlock the balance to handle partial order fill
                         quote_token_balance.available_balance += lock_amount;
 
-                        let quote_amount =
-                            quote_filled_lots as u128 + precision.quote_lot_size as u128;
+                        let quote_amount: u128 =
+                            quote_filled_lots as u128 * precision.quote_lot_size as u128;
 
                         quote_token_balance.total_balance -= quote_amount;
                         quote_token_balance.available_balance -= quote_amount;
@@ -706,7 +707,7 @@ impl SpotClearingHouse {
                             quote_token_balance.total_balance += quote_amount;
                             quote_token_balance.available_balance += quote_amount;
                         }
-                        match &counterparty_partial_fill {
+                        match &residual_order {
                             Some(counter_partial_fill) => {
                                 let ResidualOrder {
                                     account_public_key,
@@ -741,13 +742,13 @@ impl SpotClearingHouse {
 
                                 quote_token_balance.total_balance += quote_amount;
 
-                                quote_token_balance.available_balance -= quote_amount;
+                                quote_token_balance.available_balance += quote_amount;
                             }
                             None => {}
                         }
                         return Some(ExecutionResults {
                             filled_orders,
-                            residual_order: counterparty_partial_fill,
+                            residual_order,
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
                                 filled_lots: quote_filled_lots,
@@ -1441,7 +1442,7 @@ mod tests {
     }
 
     mod test_market_execution_side_effects {
-        use crate::state::order::{Order, OrderDirection};
+        use crate::state::order::Order;
 
         use super::{new_market_buy, new_market_sell, test_setup};
 
@@ -1562,7 +1563,7 @@ mod tests {
             }
         }
 
-        // #[test]
+        #[test]
         fn test_market_buy_consuming_book() {
             let user_public_key = [0; 32];
             let maker_one_public_key = [1; 32];
@@ -1570,7 +1571,7 @@ mod tests {
             let (mut spot_clearinghouse, precision) =
                 test_setup(user_public_key, maker_one_public_key, maker_two_public_key);
 
-            let buy = new_market_buy(10, 1_800_000, user_public_key);
+            let buy = new_market_buy(10, 50_000_000, user_public_key);
             spot_clearinghouse.handle_order(Order::Market(buy), &precision);
 
             // asset user state
@@ -1581,7 +1582,7 @@ mod tests {
                 let user_base_balance = user_balance.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
                 let user_quote_balance = user_balance.asset_balances.get(1).unwrap();
 
-                let expected_base_increase = (1_600 * precision.base_lot_size) as u128;
+                let expected_base_increase = (3_800 * precision.base_lot_size) as u128;
                 assert_eq!(
                     user_base_balance.total_balance,
                     1_000_000_000 + expected_base_increase
@@ -1591,7 +1592,9 @@ mod tests {
                     1_000_000_000 + expected_base_increase
                 );
 
-                let expected_quote_decrease = (2_500 * 1_600) * precision.quote_lot_size as u128;
+                let expected_quote_decrease =
+                    ((2_500 * 1_600) + (2_600 * 1_200) + (2_700 * 700) + (2_800 * 300))
+                        * precision.quote_lot_size as u128;
                 assert_eq!(
                     user_quote_balance.total_balance,
                     1_000_000_000_000 - expected_quote_decrease
@@ -1613,7 +1616,7 @@ mod tests {
                 let initial_available =
                     (1_000_000_000 - ((600 + 700 + 300) * precision.base_lot_size)) as u128;
 
-                let expected_base_decrease = (600 * precision.base_lot_size) as u128;
+                let expected_base_decrease = (1_600 * precision.base_lot_size) as u128;
 
                 assert_eq!(
                     base_balance.total_balance,
@@ -1627,7 +1630,9 @@ mod tests {
                 let initial_available = 1_000_000_000_000u128
                     - (2_200 * 700 + 2_450 * 1_000) * precision.quote_lot_size as u128;
 
-                let expected_quote_increase = (600 * 2500 * precision.quote_lot_size) as u128;
+                let expected_quote_increase: u128 =
+                    (((2_500 * 600) + (2_700 * 700) + (2_800 * 300)) * precision.quote_lot_size)
+                        as u128;
 
                 assert_eq!(
                     quote_balance.total_balance,
@@ -1651,7 +1656,7 @@ mod tests {
                 let initial_avail =
                     (1_000_000_000 - (1_000 + 1_200) * precision.base_lot_size) as u128;
 
-                let expected_base_decrease = (1_000) * precision.base_lot_size as u128;
+                let expected_base_decrease = (1_000 + 1_200) * precision.base_lot_size as u128;
 
                 assert_eq!(
                     mm_two_base_balance.total_balance,
@@ -1666,7 +1671,8 @@ mod tests {
                 let initial_avail =
                     1_000_000_000_000u128 - (2_300 * 1_100) * precision.quote_lot_size as u128;
 
-                let expected_quote_increase = (2500 * 1_000) * precision.quote_lot_size as u128;
+                let expected_quote_increase =
+                    (2500 * 1_000 + 2_600 * 1_200) * precision.quote_lot_size as u128;
 
                 assert_eq!(
                     mm_two_quote_balance.total_balance,
@@ -1679,7 +1685,7 @@ mod tests {
             }
         }
 
-        // #[test]
+        #[test]
         fn test_market_sell() {
             let user_public_key = [0; 32];
             let maker_one_public_key = [1; 32];
@@ -1722,8 +1728,9 @@ mod tests {
             {
                 // MM 1
                 // Asset base balance
-                let mm_one =
-                    spot_clearinghouse.get_account_balance_or_default(&maker_one_public_key);
+                let mm_one = spot_clearinghouse
+                    .get_account_balance(&maker_one_public_key)
+                    .unwrap();
                 let base_balance = mm_one.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
 
                 let initial_balance = 1_000_000_000;
@@ -1798,7 +1805,7 @@ mod tests {
             }
         }
 
-        // #[test]
+        #[test]
         fn test_market_sell_consume_book() {
             let user_public_key = [0; 32];
             let maker_one_public_key = [1; 32];
@@ -1816,7 +1823,7 @@ mod tests {
                 let user_base_balance = user_balance.asset_balances.get(0).unwrap(); // base should be index 0 since we initialise it first
                 let user_quote_balance = user_balance.asset_balances.get(1).unwrap();
 
-                let expected_base_decrease = (2_100 * precision.base_lot_size) as u128;
+                let expected_base_decrease = (2_800 * precision.base_lot_size) as u128;
                 assert_eq!(
                     user_base_balance.total_balance,
                     1_000_000_000 - expected_base_decrease
@@ -1826,8 +1833,8 @@ mod tests {
                     1_000_000_000 - expected_base_decrease
                 );
 
-                let expected_quote_increase =
-                    (2_450 * 1_000 + 2_300 * 1_100) * precision.quote_lot_size as u128;
+                let expected_quote_increase = (2_450 * 1_000 + 2_300 * 1_100 + 2_200 * 700)
+                    * precision.quote_lot_size as u128;
                 assert_eq!(
                     user_quote_balance.total_balance,
                     1_000_000_000_000 + expected_quote_increase
@@ -1849,7 +1856,7 @@ mod tests {
                 let initial_available =
                     (1_000_000_000 - ((600 + 700 + 300) * precision.base_lot_size)) as u128;
 
-                let expected_base_increase = ((1_000) * precision.base_lot_size) as u128;
+                let expected_base_increase = ((1_700) * precision.base_lot_size) as u128;
 
                 assert_eq!(
                     base_balance.total_balance,
@@ -1866,7 +1873,8 @@ mod tests {
                 let initial_available = 1_000_000_000_000u128
                     - (2_200 * 700 + 2_450 * 1_000) * precision.quote_lot_size as u128;
 
-                let expected_quote_decrease = ((2450 * 1000) * precision.quote_lot_size) as u128;
+                let expected_quote_decrease =
+                    ((2450 * 1000 + 2_200 * 700) * precision.quote_lot_size) as u128;
 
                 assert_eq!(
                     quote_balance.total_balance,
