@@ -10,7 +10,7 @@ use crate::{
     hotstuff::utils,
     state::{
         asset::AssetId,
-        order::{OrderDirection, OrderType},
+        order::{OrderDirection, OrderId, OrderType},
         spot_clearinghouse::MarketId,
         state::{ExecError, Nonce},
     },
@@ -28,6 +28,7 @@ pub enum TransactionStatus {
 pub enum UnsignedTransaction {
     Transfer(TransferTransaction),
     Order(OrderTransaction),
+    CancelOrder(CancelOrderTransaction),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -36,6 +37,8 @@ pub struct TransferTransaction {
     pub to: PublicKeyHash,
     pub amount: u128,
     pub asset_id: AssetId,
+    pub status: TransactionStatus,
+
     pub nonce: Nonce,
 }
 
@@ -46,6 +49,17 @@ pub struct OrderTransaction {
     pub direction: OrderDirection,
     pub order_type: OrderType,
     pub order_size: u64,
+    pub status: TransactionStatus,
+
+    pub nonce: Nonce,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CancelOrderTransaction {
+    pub from: PublicKeyHash,
+    pub market_id: MarketId,
+    pub order_id: OrderId,
+    pub status: TransactionStatus,
 
     pub nonce: Nonce,
 }
@@ -69,7 +83,6 @@ impl UnsignedTransaction {
             tx: self,
             signature,
             hash: transaction_hash,
-            status: TransactionStatus::Pending,
         }
     }
 }
@@ -87,24 +100,29 @@ pub struct SignedTransaction {
     pub tx: UnsignedTransaction,
     pub signature: SignatureString,
     pub hash: Sha256Hash,
-    pub status: TransactionStatus,
 }
 
 impl SignedTransaction {
     pub fn verify_sender(&self) -> bool {
         match &self.tx {
-            UnsignedTransaction::Transfer(transfer_transaction) => {
-                let public_key =
-                    PublicKeyString::from_bytes(transfer_transaction.from).as_public_key();
+            UnsignedTransaction::Transfer(transaction) => {
+                let public_key = PublicKeyString::from_bytes(transaction.from).as_public_key();
                 let tx_hash = self.hash;
                 let signature = utils::string_to_sig(&self.signature.as_str())
                     .expect("Conversion from string to signature failed");
                 public_key.verify_strict(&tx_hash, &signature).is_ok()
             }
 
-            UnsignedTransaction::Order(order_transaction) => {
-                let public_key =
-                    PublicKeyString::from_bytes(order_transaction.from).as_public_key();
+            UnsignedTransaction::Order(transaction) => {
+                let public_key = PublicKeyString::from_bytes(transaction.from).as_public_key();
+                let tx_hash = self.hash();
+                let signature = utils::string_to_sig(&self.signature.as_str())
+                    .expect("Conversion from string to signature failed");
+                public_key.verify_strict(&tx_hash, &signature).is_ok()
+            }
+
+            UnsignedTransaction::CancelOrder(transaction) => {
+                let public_key = PublicKeyString::from_bytes(transaction.from).as_public_key();
                 let tx_hash = self.hash();
                 let signature = utils::string_to_sig(&self.signature.as_str())
                     .expect("Conversion from string to signature failed");
@@ -115,15 +133,17 @@ impl SignedTransaction {
 
     pub fn get_from_account(&self) -> PublicKeyHash {
         match &self.tx {
-            UnsignedTransaction::Transfer(transfer_transaction) => transfer_transaction.from,
-            UnsignedTransaction::Order(order_transaction) => order_transaction.from,
+            UnsignedTransaction::Transfer(transaction) => transaction.from,
+            UnsignedTransaction::Order(transaction) => transaction.from,
+            UnsignedTransaction::CancelOrder(transaction) => transaction.from,
         }
     }
 
     pub fn get_nonce(&self) -> Nonce {
         match &self.tx {
-            UnsignedTransaction::Transfer(transfer_transaction) => transfer_transaction.nonce,
-            UnsignedTransaction::Order(order_transaction) => order_transaction.nonce,
+            UnsignedTransaction::Transfer(transaction) => transaction.nonce,
+            UnsignedTransaction::Order(transaction) => transaction.nonce,
+            UnsignedTransaction::CancelOrder(transaction) => transaction.nonce,
         }
     }
 }
@@ -260,6 +280,7 @@ mod tests {
             amount: 42,
             asset_id: 0,
             nonce: 0,
+            status: TransactionStatus::Pending,
         });
 
         let tx2 = tx1.clone();
@@ -279,6 +300,7 @@ mod tests {
             amount: 100,
             asset_id: 0,
             nonce: 0,
+            status: TransactionStatus::Pending,
         });
 
         let signed = unsigned.sign(&mut sk);
@@ -299,8 +321,8 @@ mod tests {
 
     mod public_key_string_tests {
         use crate::types::transaction::{
-            PublicKeyString, SignatureString, TransferTransaction, UnsignedTransaction,
-            tests::generate_keypair,
+            PublicKeyString, SignatureString, TransactionStatus, TransferTransaction,
+            UnsignedTransaction, tests::generate_keypair,
         };
 
         #[test]
@@ -382,6 +404,7 @@ mod tests {
                 amount: 123,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
             let tx2 = tx1.clone();
 
@@ -397,6 +420,7 @@ mod tests {
                 amount: 123,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
 
             let tx2 = UnsignedTransaction::Transfer(TransferTransaction {
@@ -405,6 +429,7 @@ mod tests {
                 amount: 456,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
 
             assert_ne!(
@@ -428,6 +453,7 @@ mod tests {
                 amount: 100,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
 
             let signed = unsigned.sign(&mut sk1);
@@ -449,6 +475,7 @@ mod tests {
                 amount: 50,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
 
             let unsigned2 = UnsignedTransaction::Transfer(TransferTransaction {
@@ -457,6 +484,7 @@ mod tests {
                 amount: 50,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
 
             let signed1 = unsigned1.sign(&mut sk1);
@@ -478,6 +506,7 @@ mod tests {
                 amount: 777,
                 asset_id: 0,
                 nonce: 0,
+                status: TransactionStatus::Pending,
             });
 
             let hash_before = unsigned.hash();

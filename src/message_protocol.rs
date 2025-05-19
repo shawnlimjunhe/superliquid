@@ -161,6 +161,9 @@ mod tests {
                         crate::types::transaction::UnsignedTransaction::Order(
                             _order_transaction,
                         ) => panic!("Expected order"),
+                        crate::types::transaction::UnsignedTransaction::CancelOrder(
+                            _cancel_order_transaction,
+                        ) => panic!("Expected order"),
                     }
                 }
                 _ => panic!("Expected Transaction"),
@@ -223,6 +226,11 @@ mod tests {
                 assert_eq!(transfer_transaction.from, get_alice_pk_str().to_bytes());
             }
             crate::types::transaction::UnsignedTransaction::Order(_order_transaction) => {
+                panic!("Expected transaction")
+            }
+            crate::types::transaction::UnsignedTransaction::CancelOrder(
+                _cancel_order_transaction,
+            ) => {
                 panic!("Expected transaction")
             }
         }

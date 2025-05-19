@@ -350,8 +350,8 @@ impl HotStuffReplica {
 
             let sending_block = new_block.clone();
             let new_block = Arc::new(RwLock::new(new_block));
-            self.blockstore
-                .insert(new_block.read().unwrap().hash(), new_block.clone());
+            let new_block_hash = new_block.read().unwrap().hash();
+            self.blockstore.insert(new_block_hash, new_block.clone());
 
             self.current_proposal = Some(new_block);
             // replica_debug!(
@@ -719,7 +719,9 @@ impl HotStuffReplica {
     }
 
     fn handle_transaction(&mut self, txn: SignedTransaction) {
-        let account_info = self.ledger_state.get_account_info(&txn.get_from_account());
+        let account_info = self
+            .ledger_state
+            .get_account_info_cloned(&txn.get_from_account());
         self.mempool.insert(txn, account_info.expected_nonce);
     }
 

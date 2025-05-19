@@ -79,6 +79,10 @@ impl PriorityMempool {
                     self.priority_buckets[Priority::Other as usize]
                         .push_back((transaction_from, expected_nonce));
                 }
+                UnsignedTransaction::CancelOrder(_) => {
+                    self.priority_buckets[Priority::Cancel as usize]
+                        .push_back((transaction_from, expected_nonce));
+                }
             }
 
             self.ready_transactions_length += 1;
@@ -169,7 +173,7 @@ mod tests {
     use super::*;
     use crate::state::state::Nonce;
     use crate::test_utils::test_helpers::get_alice_sk;
-    use crate::types::transaction::{SignedTransaction, TransferTransaction};
+    use crate::types::transaction::{SignedTransaction, TransactionStatus, TransferTransaction};
 
     fn mock_tx(pk: PublicKeyHash, nonce: Nonce) -> SignedTransaction {
         let mut alice_sk = get_alice_sk();
@@ -179,6 +183,7 @@ mod tests {
             amount: 10,
             asset_id: 0,
             nonce,
+            status: TransactionStatus::Pending,
         });
         tx.sign(&mut alice_sk)
     }

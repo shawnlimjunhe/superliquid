@@ -12,7 +12,9 @@ use crate::{
     client::ClientConnection,
     message_protocol::{self},
     state::asset::AssetId,
-    types::transaction::{PublicKeyString, TransferTransaction, UnsignedTransaction},
+    types::transaction::{
+        PublicKeyString, TransactionStatus, TransferTransaction, UnsignedTransaction,
+    },
 };
 
 pub struct ClientAccount {
@@ -160,6 +162,7 @@ async fn handle_transfer(
         amount,
         asset_id,
         nonce: account_info.expected_nonce,
+        status: TransactionStatus::Pending,
     });
 
     let tx = txn.sign(&mut client.sk);

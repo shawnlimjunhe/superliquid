@@ -93,6 +93,14 @@ impl OrderStateManager {
     }
 }
 
+pub struct CancelOrder {
+    pub id: OrderId,
+    pub market_id: MarketId,
+    pub account: PublicKeyHash,
+    pub price_multiple: OrderPriceMultiple, // quote/base
+    pub direction: OrderDirection,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OrderType {
     Limit(OrderPriceMultiple),
@@ -127,6 +135,14 @@ impl Order {
             Order::Limit(limit_order) => &limit_order.common.market_id,
             Order::Market(MarketOrder::Buy(order)) => &order.common.market_id,
             Order::Market(MarketOrder::Sell(order)) => &order.common.market_id,
+        }
+    }
+
+    pub fn get_id(&self) -> OrderId {
+        match self {
+            Order::Limit(limit_order) => limit_order.common.id,
+            Order::Market(MarketOrder::Buy(order)) => order.common.id,
+            Order::Market(MarketOrder::Sell(order)) => order.common.id,
         }
     }
 }

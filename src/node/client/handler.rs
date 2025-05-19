@@ -12,7 +12,10 @@ use crate::{
     state::{asset::AssetId, state::AccountInfoWithBalances},
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
-        transaction::{PublicKeyHash, SignedTransaction, TransferTransaction, UnsignedTransaction},
+        transaction::{
+            PublicKeyHash, SignedTransaction, TransactionStatus, TransferTransaction,
+            UnsignedTransaction,
+        },
     },
 };
 
@@ -116,6 +119,7 @@ pub(super) async fn handle_drip(
         amount: 100000,
         asset_id,
         nonce: account_info.expected_nonce,
+        status: TransactionStatus::Pending,
     });
 
     let drip_txn = drip_txn.sign(&mut faucet_key);

@@ -10,7 +10,7 @@ use super::{message::HotStuffMessage, replica::ViewNumber};
 /// # Data Structures
 /// - `Vec<Vec<HotStuffMessage>>`:
 ///   - Outer `Vec` holds messages for consecutive views, starting from `lowest_view`.
-///     - chosen over vec since most of the time views is small < 5.
+///     - chosen over vecdeque since most of the time views is small < 5.
 ///   - Inner `Vec<HotStuffMessage>` stores all messages for a specific view.
 ///   - Chosen over `LinkedList` for better memory locality.
 /// - `lowest_view: ViewNumber`:

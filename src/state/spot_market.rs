@@ -1498,6 +1498,7 @@ mod tests {
 
             market.cancel_order(&new_limit(1000, 8, OrderDirection::Sell, 5));
             let price_level = &market.asks_levels[0];
+            println!("{:?}", price_level.orders);
             assert_eq!(price_level.orders.len(), 4);
             assert_eq!(price_level.orders[1].common.status, OrderStatus::Cancelled);
             assert_eq!(price_level.cancelled, 1);

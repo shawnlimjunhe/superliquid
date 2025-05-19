@@ -7,8 +7,8 @@ use crate::{config, state::order::OrderDirection, types::transaction::PublicKeyH
 use super::{
     asset::AssetId,
     order::{
-        ExecutionResults, LimitFillResult, MarketOrder, MarketOrderMatchingResults, Order,
-        OrderChange, OrderStatus, ResidualOrder, UserExecutionResult,
+        ExecutionResults, LimitFillResult, LimitOrder, MarketOrder, MarketOrderMatchingResults,
+        Order, OrderChange, OrderStatus, ResidualOrder, UserExecutionResult,
     },
     spot_market::SpotMarket,
 };
@@ -234,6 +234,17 @@ impl SpotClearingHouse {
         let market = self.markets.get_mut(market_id);
 
         return (market, account_balance);
+    }
+
+    pub fn cancel_order(&mut self, cancel_order: &LimitOrder) {
+        let market_id = cancel_order.common.market_id;
+
+        let Some(market) = self.markets.get_mut(market_id) else {
+            println!("Can't find market with id");
+            return;
+        };
+
+        market.cancel_order(&cancel_order);
     }
 
     /// Handles order matching and resultant balance transfers if any
@@ -511,6 +522,7 @@ impl SpotClearingHouse {
 
                         if base_token_balance.available_balance < base_needed {
                             println!("Not enough balance");
+                            return None;
                         }
 
                         base_token_balance.available_balance -= base_needed;

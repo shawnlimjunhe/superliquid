@@ -1,22 +1,24 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, vec};
+use std::collections::HashMap;
 
 use crate::{
     config,
     hotstuff::block::Block,
     types::transaction::{
-        OrderTransaction, PublicKeyHash, PublicKeyString, SignedTransaction, TransactionStatus,
-        UnsignedTransaction,
+        CancelOrderTransaction, OrderTransaction, PublicKeyHash, PublicKeyString,
+        SignedTransaction, TransactionStatus, UnsignedTransaction,
     },
 };
 
 use super::{
-    asset::AssetManager,
+    asset::{AssetId, AssetManager},
     order::{
         self, ExecutionResults, LimitOrder, MarketOrder, Order, OrderId, OrderStateManager,
         OrderStatus, ResidualOrder,
     },
-    spot_clearinghouse::{AccountBalance, AccountTokenBalance, MarketPrecision, SpotClearingHouse},
+    spot_clearinghouse::{
+        AccountBalance, AccountTokenBalance, MarketId, MarketPrecision, SpotClearingHouse,
+    },
 };
 
 pub type Balance = u128;
@@ -54,6 +56,18 @@ impl AccountInfo {
             _private: (),
         }
     }
+
+    fn get_open_order(&self, order_id: OrderId) -> Option<&LimitOrder> {
+        self.open_orders
+            .iter()
+            .find(|&order| order.common.id == order_id)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum Resource {
+    Market(MarketId),
+    Asset(AssetId),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -63,6 +77,7 @@ pub enum ExecError {
         have: u128,
         need: u128,
     },
+    ResourceNotFound(Resource),
 }
 
 pub struct LedgerState {
@@ -95,7 +110,7 @@ impl LedgerState {
         &self,
         public_key: &PublicKeyHash,
     ) -> AccountInfoWithBalances {
-        let account_info = self.get_account_info(public_key);
+        let account_info = self.get_account_info_cloned(public_key);
         let spot_balances = self.get_account_spot_balances(public_key);
 
         AccountInfoWithBalances {
@@ -104,9 +119,10 @@ impl LedgerState {
         }
     }
 
-    pub(crate) fn get_account_info(&self, public_key: &PublicKeyHash) -> AccountInfo {
+    pub(crate) fn get_account_info_cloned(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.accounts.get(public_key).cloned().unwrap_or_default()
     }
+
     // retrieves account info by public key, creates one if one doesn't exist
     pub(crate) fn get_account_info_mut(&mut self, public_key: &PublicKeyHash) -> &mut AccountInfo {
         self.accounts
@@ -138,34 +154,25 @@ impl LedgerState {
 
     pub(crate) fn handle_order_transaction(
         &mut self,
-        transaction: OrderTransaction,
+        transaction: &mut OrderTransaction,
     ) -> Option<(PublicKeyHash, Nonce)> {
-        let OrderTransaction {
-            market_id,
-            from: user_account,
-            direction,
-            order_size,
-            order_type,
-            nonce,
-        } = transaction;
+        let market_id = transaction.market_id;
+        let user_account = transaction.from;
+        let direction = transaction.direction.clone();
+        let order_size = transaction.order_size;
+        let order_type = transaction.order_type.clone();
+        let nonce = transaction.nonce;
+
         // check nonce
-        let from_account_info = self.get_account_info(&user_account);
+        let from_account_info = self.get_account_info_mut(&transaction.from);
         if nonce < from_account_info.expected_nonce {
-            println!("Duplicate nonce");
+            transaction.status = TransactionStatus::Rejected("Duplicate nonce".to_string());
             return None;
-            // Err(ExecError::DuplicateNonce {
-            //     from: PublicKeyString::from_bytes(user_account),
-            //     nonce,
-            // });
         }
 
         if nonce > from_account_info.expected_nonce {
-            println!("Out of order nonce");
+            transaction.status = TransactionStatus::Rejected("Out of order nonce".to_string());
             return None;
-            // return Err(ExecError::OutOfOrderNonce {
-            //     from: PublicKeyString::from_bytes(user_account),
-            //     nonce,
-            // });
         }
 
         let order = match order_type {
@@ -196,12 +203,18 @@ impl LedgerState {
             .spot_clearinghouse
             .get_quote_base_tick_from_id(market_id)
         else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Market(market_id)));
             return None;
         };
         let Some(quote_asset) = self.asset_manager.assets.get(quote_asset as usize) else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Asset(quote_asset)));
             return None;
         };
         let Some(base_asset) = self.asset_manager.assets.get(base_asset as usize) else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Asset(base_asset)));
             return None;
         };
 
@@ -209,9 +222,10 @@ impl LedgerState {
             base_lot_size: base_asset.lot_size,
             quote_lot_size: quote_asset.lot_size,
             tick,
-            tick_decimals: tick_decimals,
+            tick_decimals,
         };
 
+        // Transaction should be atomic here
         let result = self
             .spot_clearinghouse
             .handle_order(order.clone(), &precision);
@@ -327,6 +341,46 @@ impl LedgerState {
         }
         let account = self.get_account_info_mut(&user_account);
         account.expected_nonce += 1;
+        transaction.status = TransactionStatus::Executed;
+
+        return Some((user_account, account.expected_nonce));
+    }
+
+    pub(crate) fn handle_cancel_order_transaction(
+        &mut self,
+        transaction: &mut CancelOrderTransaction,
+    ) -> Option<(PublicKeyHash, Nonce)> {
+        let market_id = transaction.market_id;
+        let user_account = transaction.from;
+        let nonce = transaction.nonce;
+
+        // check nonce
+        let from_account_info = self.get_account_info_cloned(&transaction.from);
+        // todo should change the clone
+        if nonce < from_account_info.expected_nonce {
+            transaction.status = TransactionStatus::Rejected("Duplicate nonce".to_string());
+            return None;
+        }
+
+        if nonce > from_account_info.expected_nonce {
+            transaction.status = TransactionStatus::Rejected("Out of order nonce".to_string());
+            return None;
+        }
+
+        let order = from_account_info.get_open_order(transaction.order_id);
+
+        let Some(order) = order else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Market(market_id)));
+            return None;
+        };
+
+        self.spot_clearinghouse.cancel_order(order);
+
+        let account = self.get_account_info_mut(&user_account);
+        account.expected_nonce += 1;
+        transaction.status = TransactionStatus::Executed;
+
         return Some((user_account, account.expected_nonce));
     }
 
@@ -337,21 +391,21 @@ impl LedgerState {
         let mut account_nonces: Vec<Option<(PublicKeyHash, Nonce)>> = vec![];
 
         for transaction in transactions.iter_mut() {
-            match &transaction.tx {
+            match &mut transaction.tx {
                 UnsignedTransaction::Transfer(tx) => {
                     let new_expected_nonce = {
                         {
-                            let from_account_info = self.get_account_info(&tx.from);
+                            let from_account_info = self.get_account_info_cloned(&tx.from);
 
                             if tx.nonce < from_account_info.expected_nonce {
-                                transaction.status =
+                                tx.status =
                                     TransactionStatus::Rejected("Duplicate Nonce".to_string());
                                 println!("Duplicate nonce");
                                 continue;
                             }
 
                             if tx.nonce > from_account_info.expected_nonce {
-                                transaction.status =
+                                tx.status =
                                     TransactionStatus::Rejected("Out of order nonce".to_string());
                             }
                         }
@@ -369,23 +423,21 @@ impl LedgerState {
                             .find(|a| a.asset_id == tx.asset_id);
 
                         let Some(from_token_balance) = from_token_balance_opt else {
-                            transaction.status =
-                                TransactionStatus::Error(ExecError::InsufficientFunds {
-                                    from: PublicKeyString::from_bytes(tx.from),
-                                    have: 0,
-                                    need: tx.amount,
-                                });
+                            tx.status = TransactionStatus::Error(ExecError::InsufficientFunds {
+                                from: PublicKeyString::from_bytes(tx.from),
+                                have: 0,
+                                need: tx.amount,
+                            });
                             account_nonces.push(Some((tx.from, new_expected_nonce)));
                             continue;
                         };
 
                         if from_token_balance.available_balance < tx.amount {
-                            transaction.status =
-                                TransactionStatus::Error(ExecError::InsufficientFunds {
-                                    from: PublicKeyString::from_bytes(tx.from),
-                                    have: from_token_balance.total_balance,
-                                    need: tx.amount,
-                                });
+                            tx.status = TransactionStatus::Error(ExecError::InsufficientFunds {
+                                from: PublicKeyString::from_bytes(tx.from),
+                                have: from_token_balance.total_balance,
+                                need: tx.amount,
+                            });
 
                             account_nonces.push(Some((tx.from, new_expected_nonce)));
                             continue;
@@ -411,11 +463,16 @@ impl LedgerState {
                                 total_balance: tx.amount,
                             }),
                     }
+                    tx.status = TransactionStatus::Executed;
 
                     account_nonces.push(Some((tx.from, new_expected_nonce)));
                 }
                 UnsignedTransaction::Order(order_transaction) => {
-                    account_nonces.push(self.handle_order_transaction(order_transaction.clone()))
+                    account_nonces.push(self.handle_order_transaction(order_transaction))
+                }
+                UnsignedTransaction::CancelOrder(cancel_order_transaction) => {
+                    account_nonces
+                        .push(self.handle_cancel_order_transaction(cancel_order_transaction));
                 }
             }
         }

@@ -2,7 +2,8 @@
 pub mod test_helpers {
 
     use crate::types::transaction::{
-        PublicKeyString, SignedTransaction, TransferTransaction, UnsignedTransaction,
+        PublicKeyString, SignedTransaction, TransactionStatus, TransferTransaction,
+        UnsignedTransaction,
     };
     use hex::FromHex;
 
@@ -43,6 +44,7 @@ pub mod test_helpers {
             amount: 42,
             asset_id: 0,
             nonce: 0,
+            status: TransactionStatus::Pending,
         });
         unsigned_txn.sign(&mut get_alice_sk())
     }
