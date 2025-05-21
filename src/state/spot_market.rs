@@ -118,7 +118,7 @@ impl SpotMarket {
         return false;
     }
 
-    fn cancel_order_with_cmp<F>(levels: &mut Vec<Level>, order: &LimitOrder, mut compare: F)
+    fn cancel_order_with_cmp<F>(levels: &mut Vec<Level>, order: &LimitOrder, mut compare: F) -> u64
     where
         F: FnMut(OrderPriceMultiple, OrderPriceMultiple) -> std::cmp::Ordering,
     {
@@ -133,22 +133,22 @@ impl SpotMarket {
             if price == mid_price {
                 let level = &mut levels[mid];
                 if !Self::mark_order_as_cancelled(&mut level.orders, order) {
-                    return;
+                    return 0;
                 }
 
                 level.cancelled += 1;
                 let unfilled_size = order.base_lots - order.filled_base_lots;
                 level.volume -= unfilled_size;
 
-                if level.cancelled <= (level.orders.len() / 2) as u32 {
-                    return;
+                if level.cancelled > (level.orders.len() / 2) as u32 {
+                    // prune when vector is sparse enough
+                    level
+                        .orders
+                        .retain(|order| order.common.status != OrderStatus::Cancelled);
+                    level.cancelled = 0;
                 }
-                // prune when vector is sparse enough
-                level
-                    .orders
-                    .retain(|order| order.common.status != OrderStatus::Cancelled);
-                level.cancelled = 0;
-                return;
+
+                return unfilled_size;
             } else {
                 if compare(price, mid_price) == std::cmp::Ordering::Less {
                     right = mid;
@@ -157,6 +157,7 @@ impl SpotMarket {
                 }
             }
         }
+        return 0;
     }
 
     pub fn add_bid(&mut self, order: LimitOrder) {
@@ -171,16 +172,16 @@ impl SpotMarket {
         });
     }
 
-    pub fn cancel_bid(&mut self, order: &LimitOrder) {
+    pub fn cancel_bid(&mut self, order: &LimitOrder) -> u64 {
         Self::cancel_order_with_cmp(&mut self.bids_levels, order, |a, b| {
             a.partial_cmp(&b).unwrap()
-        });
+        })
     }
 
-    pub fn cancel_ask(&mut self, order: &LimitOrder) {
+    pub fn cancel_ask(&mut self, order: &LimitOrder) -> u64 {
         Self::cancel_order_with_cmp(&mut self.asks_levels, order, |a, b| {
             b.partial_cmp(&a).unwrap()
-        });
+        })
     }
 
     pub fn execute_limit<F>(
@@ -555,7 +556,7 @@ impl SpotMarket {
         }
     }
 
-    pub fn cancel_order(&mut self, order: &LimitOrder) {
+    pub fn cancel_order(&mut self, order: &LimitOrder) -> u64 {
         match order.common.direction {
             OrderDirection::Buy => self.cancel_bid(order),
             OrderDirection::Sell => self.cancel_ask(order),

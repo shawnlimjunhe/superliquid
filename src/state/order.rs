@@ -103,8 +103,8 @@ pub struct CancelOrder {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OrderType {
-    Limit(OrderPriceMultiple),
-    Market,
+    Limit(OrderPriceMultiple, u64),
+    Market(u64),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

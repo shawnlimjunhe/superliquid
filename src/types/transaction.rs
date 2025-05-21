@@ -48,7 +48,6 @@ pub struct OrderTransaction {
     pub market_id: MarketId,
     pub direction: OrderDirection,
     pub order_type: OrderType,
-    pub order_size: u64,
     pub status: TransactionStatus,
 
     pub nonce: Nonce,

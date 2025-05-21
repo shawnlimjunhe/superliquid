@@ -124,7 +124,8 @@ impl HotStuffReplica {
         &self,
         public_key: &PublicKeyHash,
     ) -> AccountInfoWithBalances {
-        self.ledger_state.get_account_info_with_balances(public_key)
+        self.ledger_state
+            .get_account_info_with_balances_or_default(public_key)
     }
 
     pub fn vote_message(&mut self, node: &Block) -> HotStuffMessage {
@@ -721,7 +722,7 @@ impl HotStuffReplica {
     fn handle_transaction(&mut self, txn: SignedTransaction) {
         let account_info = self
             .ledger_state
-            .get_account_info_cloned(&txn.get_from_account());
+            .get_account_info_or_default(&txn.get_from_account());
         self.mempool.insert(txn, account_info.expected_nonce);
     }
 

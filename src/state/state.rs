@@ -106,12 +106,12 @@ impl LedgerState {
         }
     }
 
-    pub(crate) fn get_account_info_with_balances(
+    pub(crate) fn get_account_info_with_balances_or_default(
         &self,
         public_key: &PublicKeyHash,
     ) -> AccountInfoWithBalances {
-        let account_info = self.get_account_info_cloned(public_key);
-        let spot_balances = self.get_account_spot_balances(public_key);
+        let account_info = self.get_account_info_or_default(public_key);
+        let spot_balances = self.get_account_spot_balances_or_default(public_key);
 
         AccountInfoWithBalances {
             account_info,
@@ -119,7 +119,20 @@ impl LedgerState {
         }
     }
 
-    pub(crate) fn get_account_info_cloned(&self, public_key: &PublicKeyHash) -> AccountInfo {
+    // pub(crate) fn get_account_info_with_balances(
+    //     &self,
+    //     public_key: &PublicKeyHash,
+    // ) -> Option<AccountInfoWithBalances> {
+    //     let account_info = self.accounts.get(public_key)?;
+    //     let account_balances = self.spot_clearinghouse.get_account_balance(public_key)?;
+
+    //     return Some(AccountInfoWithBalances {
+    //         account_info: account_info,
+    //         spot_balances: account_balances,
+    //     });
+    // }
+
+    pub(crate) fn get_account_info_or_default(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.accounts.get(public_key).cloned().unwrap_or_default()
     }
 
@@ -137,7 +150,10 @@ impl LedgerState {
         self.spot_clearinghouse.get_account_balance_mut(public_key)
     }
 
-    pub(crate) fn get_account_spot_balances(&self, public_key: &PublicKeyHash) -> AccountBalance {
+    pub(crate) fn get_account_spot_balances_or_default(
+        &self,
+        public_key: &PublicKeyHash,
+    ) -> AccountBalance {
         self.spot_clearinghouse
             .get_account_balance_or_default(public_key)
     }
@@ -159,7 +175,6 @@ impl LedgerState {
         let market_id = transaction.market_id;
         let user_account = transaction.from;
         let direction = transaction.direction.clone();
-        let order_size = transaction.order_size;
         let order_type = transaction.order_type.clone();
         let nonce = transaction.nonce;
 
@@ -176,19 +191,19 @@ impl LedgerState {
         }
 
         let order = match order_type {
-            order::OrderType::Limit(price) => {
+            order::OrderType::Limit(price, quote_size) => {
                 let order = self.order_manager.new_limit_order(
                     market_id,
                     user_account,
                     direction,
                     price,
-                    transaction.order_size,
+                    quote_size,
                 );
                 let account_info = self.get_account_info_mut(&user_account);
                 account_info.open_orders.push(order.clone());
                 Order::Limit(order)
             }
-            order::OrderType::Market => {
+            order::OrderType::Market(order_size) => {
                 let order = self.order_manager.new_market_order(
                     market_id,
                     user_account,
@@ -355,7 +370,7 @@ impl LedgerState {
         let nonce = transaction.nonce;
 
         // check nonce
-        let from_account_info = self.get_account_info_cloned(&transaction.from);
+        let from_account_info = self.get_account_info_or_default(&transaction.from);
         // todo should change the clone
         if nonce < from_account_info.expected_nonce {
             transaction.status = TransactionStatus::Rejected("Duplicate nonce".to_string());
@@ -375,7 +390,41 @@ impl LedgerState {
             return None;
         };
 
-        self.spot_clearinghouse.cancel_order(order);
+        let Some((quote_asset, base_asset, tick, tick_decimals)) = self
+            .spot_clearinghouse
+            .get_quote_base_tick_from_id(market_id)
+        else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Market(market_id)));
+            return None;
+        };
+        let Some(quote_asset) = self.asset_manager.assets.get(quote_asset as usize) else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Asset(quote_asset)));
+            return None;
+        };
+        let Some(base_asset) = self.asset_manager.assets.get(base_asset as usize) else {
+            transaction.status =
+                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Asset(base_asset)));
+            return None;
+        };
+
+        let precision = MarketPrecision {
+            base_lot_size: base_asset.lot_size,
+            quote_lot_size: quote_asset.lot_size,
+            tick,
+            tick_decimals,
+        };
+
+        if self.spot_clearinghouse.cancel_order(order, &precision) {
+            let account = self.get_account_info_mut(&user_account);
+            let pos = account
+                .open_orders
+                .iter()
+                .position(|o| o.common.id == order.common.id)?;
+            account.open_orders.remove(pos);
+            account.completed_orders.push(Order::Limit(order.clone()));
+        };
 
         let account = self.get_account_info_mut(&user_account);
         account.expected_nonce += 1;
@@ -395,7 +444,7 @@ impl LedgerState {
                 UnsignedTransaction::Transfer(tx) => {
                     let new_expected_nonce = {
                         {
-                            let from_account_info = self.get_account_info_cloned(&tx.from);
+                            let from_account_info = self.get_account_info_or_default(&tx.from);
 
                             if tx.nonce < from_account_info.expected_nonce {
                                 tx.status =
@@ -485,4 +534,182 @@ impl LedgerState {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    mod test_spot_clearinghouse {
+        use ed25519_dalek::SigningKey;
+
+        use crate::{
+            config,
+            hotstuff::{block::Block, crypto::QuorumCertificate},
+            state::{
+                order::{Order, OrderDirection, OrderType},
+                spot_clearinghouse::{MarketId, MarketPrecision},
+                state::{LedgerState, Nonce},
+            },
+            test_utils::test_helpers::{get_alice_sk, get_bob_sk, get_carol_sk},
+            types::transaction::{
+                self, CancelOrderTransaction, OrderTransaction, PublicKeyHash, SignedTransaction,
+                TransactionStatus, TransferTransaction, UnsignedTransaction,
+            },
+        };
+
+        fn create_faucet_transaction(
+            faucet_sk: &mut SigningKey,
+            to: PublicKeyHash,
+            asset_id: u32,
+            amount: u128,
+            nonce: Nonce,
+        ) -> SignedTransaction {
+            let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
+                from: faucet_sk.to_bytes(),
+                to,
+                amount,
+                asset_id,
+                nonce,
+                status: TransactionStatus::Pending,
+            });
+            unsigned.sign(faucet_sk)
+        }
+
+        fn create_transfer_transaction(
+            sk: &mut SigningKey,
+            to: PublicKeyHash,
+            amount: u128,
+            asset_id: u32,
+            nonce: Nonce,
+        ) -> SignedTransaction {
+            let binding = sk.verifying_key();
+            let pk = binding.as_bytes();
+            let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
+                from: *pk,
+                to,
+                amount,
+                asset_id,
+                nonce,
+                status: TransactionStatus::Pending,
+            });
+            unsigned.sign(sk)
+        }
+
+        fn create_order_transaction(
+            sk: &mut SigningKey,
+            market_id: MarketId,
+            direction: OrderDirection,
+            order_type: OrderType,
+            nonce: Nonce,
+        ) -> SignedTransaction {
+            let binding = sk.verifying_key();
+            let pk = binding.as_bytes();
+            let unsigned = UnsignedTransaction::Order(OrderTransaction {
+                from: *pk,
+                market_id,
+                direction,
+                order_type,
+                status: TransactionStatus::Pending,
+                nonce,
+            });
+            unsigned.sign(sk)
+        }
+
+        fn create_cancel_order_transaction(
+            sk: &mut SigningKey,
+            market_id: MarketId,
+            order_id: u64,
+            order_type: OrderType,
+            nonce: Nonce,
+        ) -> SignedTransaction {
+            let binding = sk.verifying_key();
+            let pk = binding.as_bytes();
+            let unsigned = UnsignedTransaction::CancelOrder(CancelOrderTransaction {
+                from: *pk,
+                market_id,
+                order_id,
+                status: TransactionStatus::Pending,
+                nonce,
+            });
+            unsigned.sign(sk)
+        }
+
+        fn create_block(transactions: Vec<SignedTransaction>) -> Block {
+            Block::Normal {
+                parent_id: [0; 32],
+                transactions,
+                view_number: 0,
+                justify: QuorumCertificate::mock(0),
+                merkle_root: [0; 32],
+            }
+        }
+
+        fn test_setup() -> LedgerState {
+            // Setup
+            let mut ledger_state = LedgerState::new();
+            let base = 0;
+            let quote = 1;
+            let tick = 100;
+            let tick_decimals = 2;
+            let precision = MarketPrecision {
+                base_lot_size: 100,
+                quote_lot_size: 100,
+                tick: tick,
+                tick_decimals: tick_decimals,
+            };
+
+            ledger_state
+                .spot_clearinghouse
+                .add_market(base, quote, tick, tick_decimals);
+
+            let user_sk = get_alice_sk();
+            let mm_1_sk = get_bob_sk();
+            let mm_2_sk = get_carol_sk();
+
+            let (faucet_pk, mut faucet_sk) = config::retrieve_faucet_keys();
+
+            let user_pk = user_sk.verifying_key().to_bytes();
+            let mm_1_pk = mm_1_sk.verifying_key().to_bytes();
+            let mm_2_pk = mm_2_sk.verifying_key().to_bytes();
+
+            // Drip assets to users
+            let user_base_drip_tx =
+                create_faucet_transaction(&mut faucet_sk, user_pk, base, 1_000_000_000, 0);
+            let user_quote_drip_tx =
+                create_faucet_transaction(&mut faucet_sk, user_pk, quote, 1_000_000_000_000, 1);
+            let mm_1_base_drip_tx =
+                create_faucet_transaction(&mut faucet_sk, mm_1_pk, base, 1_000_000_000, 2);
+            let mm_1_quote_drip_tx =
+                create_faucet_transaction(&mut faucet_sk, mm_1_pk, quote, 1_000_000_000_000, 3);
+            let mm_2_base_drip_tx =
+                create_faucet_transaction(&mut faucet_sk, mm_2_pk, base, 1_000_000_000, 4);
+            let mm_2_quote_drip_tx =
+                create_faucet_transaction(&mut faucet_sk, mm_2_pk, quote, 1_000_000_000_000, 6);
+
+            let res = ledger_state.apply_block(&mut create_block(vec![user_base_drip_tx]));
+            ledger_state.apply_block(&mut create_block(vec![user_quote_drip_tx]));
+            ledger_state.apply_block(&mut create_block(vec![mm_1_base_drip_tx]));
+            ledger_state.apply_block(&mut create_block(vec![mm_1_quote_drip_tx]));
+            ledger_state.apply_block(&mut create_block(vec![mm_2_base_drip_tx]));
+            ledger_state.apply_block(&mut create_block(vec![mm_2_quote_drip_tx]));
+
+            println!(
+                "{:#?}",
+                ledger_state
+                    .get_account_info_with_balances_or_default(&user_pk)
+                    .spot_balances
+            );
+            assert_eq!(
+                ledger_state
+                    .get_account_info_with_balances_or_default(&user_pk)
+                    .spot_balances
+                    .asset_balances[base as usize]
+                    .available_balance,
+                1_000_000_000
+            );
+
+            ledger_state
+        }
+
+        #[test]
+        pub fn test_test_setup() {
+            test_setup();
+        }
+    }
+}

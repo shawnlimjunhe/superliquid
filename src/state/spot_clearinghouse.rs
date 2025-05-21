@@ -236,15 +236,38 @@ impl SpotClearingHouse {
         return (market, account_balance);
     }
 
-    pub fn cancel_order(&mut self, cancel_order: &LimitOrder) {
+    pub fn cancel_order(&mut self, cancel_order: &LimitOrder, precision: &MarketPrecision) -> bool {
         let market_id = cancel_order.common.market_id;
 
-        let Some(market) = self.markets.get_mut(market_id) else {
+        let (market, account_balance) =
+            self.get_market_and_account_balance(market_id, &cancel_order.common.account);
+        let Some(market) = market else {
             println!("Can't find market with id");
-            return;
+            return false;
         };
 
-        market.cancel_order(&cancel_order);
+        let unfilled_base = market.cancel_order(&cancel_order);
+        let price = cancel_order.price_multiple;
+
+        match cancel_order.common.direction {
+            OrderDirection::Buy => {
+                let quote_token_balance =
+                    Self::get_account_token_balance_mut(account_balance, market.quote_asset);
+
+                let quote_lots = base_to_quote_lots(unfilled_base, price, precision);
+                let quote_amount = quote_lots as u128 * precision.quote_lot_size as u128;
+                quote_token_balance.available_balance += quote_amount;
+                true
+            }
+            OrderDirection::Sell => {
+                let base_token_balance =
+                    Self::get_account_token_balance_mut(account_balance, market.base_asset);
+
+                let base_amount = unfilled_base as u128 * precision.base_lot_size as u128;
+                base_token_balance.available_balance += base_amount;
+                true
+            }
+        }
     }
 
     /// Handles order matching and resultant balance transfers if any
@@ -856,7 +879,7 @@ mod tests {
             tick_decimals: tick_decimals,
         };
 
-        spot_clearinghouse.add_market(0, 1, tick, tick_decimals);
+        spot_clearinghouse.add_market(base_asset, quote_asset, tick, tick_decimals);
 
         // Fund accounts
         {
@@ -905,6 +928,7 @@ mod tests {
         let buy_1 = new_limit(2_200, 700, OrderDirection::Buy, 1, maker_one_public_key);
         let buy_2 = new_limit(2_300, 700, OrderDirection::Buy, 2, maker_two_public_key);
         let buy_3 = new_limit(2_300, 400, OrderDirection::Buy, 3, maker_two_public_key);
+        let buy_5 = new_limit(2_300, 700, OrderDirection::Buy, 10, maker_two_public_key);
         let buy_4 = new_limit(2_450, 1_000, OrderDirection::Buy, 4, maker_one_public_key);
 
         // Sells
@@ -913,6 +937,7 @@ mod tests {
         let sell_3 = new_limit(2_600, 1_200, OrderDirection::Sell, 7, maker_two_public_key);
         let sell_4 = new_limit(2_700, 700, OrderDirection::Sell, 8, maker_one_public_key);
         let sell_5 = new_limit(2_800, 300, OrderDirection::Sell, 9, maker_one_public_key);
+        let sell_6 = new_limit(2_500, 300, OrderDirection::Sell, 10, maker_one_public_key);
 
         spot_clearinghouse.handle_order(Order::Limit(buy_1), &precision);
         spot_clearinghouse.handle_order(Order::Limit(sell_1), &precision);
@@ -923,6 +948,12 @@ mod tests {
         spot_clearinghouse.handle_order(Order::Limit(sell_3), &precision);
         spot_clearinghouse.handle_order(Order::Limit(sell_5), &precision);
         spot_clearinghouse.handle_order(Order::Limit(sell_4), &precision);
+
+        spot_clearinghouse.handle_order(Order::Limit(buy_5.clone()), &precision);
+        spot_clearinghouse.cancel_order(&buy_5, &precision);
+
+        spot_clearinghouse.handle_order(Order::Limit(sell_6.clone()), &precision);
+        spot_clearinghouse.cancel_order(&sell_6, &precision);
 
         let market = spot_clearinghouse.markets.get(0).unwrap();
 
