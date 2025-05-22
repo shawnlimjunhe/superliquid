@@ -38,6 +38,20 @@ pub struct AccountInfoWithBalances {
     pub spot_balances: AccountBalance,
 }
 
+pub struct AccountInfoWithBalancesRef<'a> {
+    pub account_info: &'a AccountInfo,
+    pub spot_balances: &'a AccountBalance,
+}
+
+impl<'a> From<AccountInfoWithBalancesRef<'a>> for AccountInfoWithBalances {
+    fn from(r: AccountInfoWithBalancesRef<'a>) -> Self {
+        Self {
+            account_info: r.account_info.clone(),
+            spot_balances: r.spot_balances.clone(),
+        }
+    }
+}
+
 impl AccountInfo {
     pub(crate) fn new() -> Self {
         Self {
@@ -110,27 +124,26 @@ impl LedgerState {
         &self,
         public_key: &PublicKeyHash,
     ) -> AccountInfoWithBalances {
-        let account_info = self.get_account_info_or_default(public_key);
-        let spot_balances = self.get_account_spot_balances_or_default(public_key);
+        let account_opt = self.get_account_info_with_balances(public_key);
+        let Some(account_info) = account_opt else {
+            return AccountInfoWithBalances::default();
+        };
 
-        AccountInfoWithBalances {
-            account_info,
-            spot_balances,
-        }
+        account_info.into()
     }
 
-    // pub(crate) fn get_account_info_with_balances(
-    //     &self,
-    //     public_key: &PublicKeyHash,
-    // ) -> Option<AccountInfoWithBalances> {
-    //     let account_info = self.accounts.get(public_key)?;
-    //     let account_balances = self.spot_clearinghouse.get_account_balance(public_key)?;
+    pub(crate) fn get_account_info_with_balances(
+        &self,
+        public_key: &PublicKeyHash,
+    ) -> Option<AccountInfoWithBalancesRef> {
+        let account_info = self.accounts.get(public_key)?;
+        let account_balances = self.spot_clearinghouse.get_account_balance(public_key)?;
 
-    //     return Some(AccountInfoWithBalances {
-    //         account_info: account_info,
-    //         spot_balances: account_balances,
-    //     });
-    // }
+        return Some(AccountInfoWithBalancesRef {
+            account_info: account_info,
+            spot_balances: account_balances,
+        });
+    }
 
     pub(crate) fn get_account_info_or_default(&self, public_key: &PublicKeyHash) -> AccountInfo {
         self.accounts.get(public_key).cloned().unwrap_or_default()
@@ -148,14 +161,6 @@ impl LedgerState {
         public_key: &PublicKeyHash,
     ) -> &mut AccountBalance {
         self.spot_clearinghouse.get_account_balance_mut(public_key)
-    }
-
-    pub(crate) fn get_account_spot_balances_or_default(
-        &self,
-        public_key: &PublicKeyHash,
-    ) -> AccountBalance {
-        self.spot_clearinghouse
-            .get_account_balance_or_default(public_key)
     }
 
     fn get_order_position_from_open_orders(
@@ -443,29 +448,24 @@ impl LedgerState {
             match &mut transaction.tx {
                 UnsignedTransaction::Transfer(tx) => {
                     let new_expected_nonce = {
-                        {
-                            let from_account_info = self.get_account_info_or_default(&tx.from);
+                        let from_account_info = self.get_account_info_mut(&tx.from);
 
-                            if tx.nonce < from_account_info.expected_nonce {
-                                tx.status =
-                                    TransactionStatus::Rejected("Duplicate Nonce".to_string());
-                                println!("Duplicate nonce");
-                                continue;
-                            }
-
-                            if tx.nonce > from_account_info.expected_nonce {
-                                tx.status =
-                                    TransactionStatus::Rejected("Out of order nonce".to_string());
-                            }
+                        if tx.nonce < from_account_info.expected_nonce {
+                            tx.status = TransactionStatus::Rejected("Duplicate Nonce".to_string());
+                            continue;
                         }
 
-                        let new_expected_nonce = {
-                            let from_account_info = self.get_account_info_mut(&tx.from);
-                            from_account_info.expected_nonce += 1;
-                            from_account_info.expected_nonce
-                        };
+                        if tx.nonce > from_account_info.expected_nonce {
+                            tx.status =
+                                TransactionStatus::Rejected("Out of order nonce".to_string());
+                            continue;
+                        }
+
+                        from_account_info.expected_nonce += 1;
+                        let new_expected_nonce = from_account_info.expected_nonce;
 
                         let from_account_balances = self.get_account_spot_balances_mut(&tx.from);
+
                         let from_token_balance_opt = from_account_balances
                             .asset_balances
                             .iter_mut()
@@ -496,6 +496,10 @@ impl LedgerState {
                         new_expected_nonce
                     };
 
+                    // Create account info if not created
+                    {
+                        self.get_account_info_mut(&tx.to);
+                    }
                     let to_account_balances = self.get_account_spot_balances_mut(&tx.to);
                     let to_token_balance_opt = to_account_balances
                         .asset_balances
@@ -503,7 +507,11 @@ impl LedgerState {
                         .find(|a| a.asset_id == tx.asset_id);
 
                     match to_token_balance_opt {
-                        Some(account_balance) => account_balance.total_balance += tx.amount,
+                        Some(account_balance) => {
+                            account_balance.total_balance += tx.amount;
+                            account_balance.available_balance += tx.amount;
+                        }
+
                         None => to_account_balances
                             .asset_balances
                             .push(AccountTokenBalance {
@@ -512,6 +520,7 @@ impl LedgerState {
                                 total_balance: tx.amount,
                             }),
                     }
+
                     tx.status = TransactionStatus::Executed;
 
                     account_nonces.push(Some((tx.from, new_expected_nonce)));
@@ -542,26 +551,27 @@ mod tests {
             config,
             hotstuff::{block::Block, crypto::QuorumCertificate},
             state::{
-                order::{Order, OrderDirection, OrderType},
+                order::{OrderDirection, OrderType},
                 spot_clearinghouse::{MarketId, MarketPrecision},
                 state::{LedgerState, Nonce},
             },
             test_utils::test_helpers::{get_alice_sk, get_bob_sk, get_carol_sk},
             types::transaction::{
-                self, CancelOrderTransaction, OrderTransaction, PublicKeyHash, SignedTransaction,
+                CancelOrderTransaction, OrderTransaction, PublicKeyHash, SignedTransaction,
                 TransactionStatus, TransferTransaction, UnsignedTransaction,
             },
         };
 
-        fn create_faucet_transaction(
+        fn create_faucet_txn(
             faucet_sk: &mut SigningKey,
             to: PublicKeyHash,
             asset_id: u32,
             amount: u128,
             nonce: Nonce,
         ) -> SignedTransaction {
+            let pk = faucet_sk.verifying_key().to_bytes();
             let unsigned = UnsignedTransaction::Transfer(TransferTransaction {
-                from: faucet_sk.to_bytes(),
+                from: pk,
                 to,
                 amount,
                 asset_id,
@@ -571,7 +581,7 @@ mod tests {
             unsigned.sign(faucet_sk)
         }
 
-        fn create_transfer_transaction(
+        fn _create_transfer_txn(
             sk: &mut SigningKey,
             to: PublicKeyHash,
             amount: u128,
@@ -591,7 +601,7 @@ mod tests {
             unsigned.sign(sk)
         }
 
-        fn create_order_transaction(
+        fn create_order_txn(
             sk: &mut SigningKey,
             market_id: MarketId,
             direction: OrderDirection,
@@ -611,11 +621,10 @@ mod tests {
             unsigned.sign(sk)
         }
 
-        fn create_cancel_order_transaction(
+        fn create_cancel_txn(
             sk: &mut SigningKey,
             market_id: MarketId,
             order_id: u64,
-            order_type: OrderType,
             nonce: Nonce,
         ) -> SignedTransaction {
             let binding = sk.verifying_key();
@@ -647,7 +656,7 @@ mod tests {
             let quote = 1;
             let tick = 100;
             let tick_decimals = 2;
-            let precision = MarketPrecision {
+            let _precision = MarketPrecision {
                 base_lot_size: 100,
                 quote_lot_size: 100,
                 tick: tick,
@@ -659,57 +668,366 @@ mod tests {
                 .add_market(base, quote, tick, tick_decimals);
 
             let user_sk = get_alice_sk();
-            let mm_1_sk = get_bob_sk();
-            let mm_2_sk = get_carol_sk();
+            let mut mm_1_sk = get_bob_sk();
+            let mut mm_2_sk = get_carol_sk();
 
-            let (faucet_pk, mut faucet_sk) = config::retrieve_faucet_keys();
+            let (_faucet_pk, mut faucet_sk) = config::retrieve_faucet_keys();
 
             let user_pk = user_sk.verifying_key().to_bytes();
             let mm_1_pk = mm_1_sk.verifying_key().to_bytes();
             let mm_2_pk = mm_2_sk.verifying_key().to_bytes();
 
+            let mut mm_1_nonce = 0;
+            let mut mm_2_nonce = 0;
+
             // Drip assets to users
-            let user_base_drip_tx =
-                create_faucet_transaction(&mut faucet_sk, user_pk, base, 1_000_000_000, 0);
-            let user_quote_drip_tx =
-                create_faucet_transaction(&mut faucet_sk, user_pk, quote, 1_000_000_000_000, 1);
-            let mm_1_base_drip_tx =
-                create_faucet_transaction(&mut faucet_sk, mm_1_pk, base, 1_000_000_000, 2);
-            let mm_1_quote_drip_tx =
-                create_faucet_transaction(&mut faucet_sk, mm_1_pk, quote, 1_000_000_000_000, 3);
-            let mm_2_base_drip_tx =
-                create_faucet_transaction(&mut faucet_sk, mm_2_pk, base, 1_000_000_000, 4);
-            let mm_2_quote_drip_tx =
-                create_faucet_transaction(&mut faucet_sk, mm_2_pk, quote, 1_000_000_000_000, 6);
+            {
+                let user_base_drip_tx =
+                    create_faucet_txn(&mut faucet_sk, user_pk, base, 1_000_000_000, 0);
+                let user_quote_drip_tx =
+                    create_faucet_txn(&mut faucet_sk, user_pk, quote, 1_000_000_000_000, 1);
+                let mm_1_base_drip_tx =
+                    create_faucet_txn(&mut faucet_sk, mm_1_pk, base, 1_000_000_000, 2);
+                let mm_1_quote_drip_tx =
+                    create_faucet_txn(&mut faucet_sk, mm_1_pk, quote, 1_000_000_000_000, 3);
+                let mm_2_base_drip_tx =
+                    create_faucet_txn(&mut faucet_sk, mm_2_pk, base, 1_000_000_000, 4);
+                let mm_2_quote_drip_tx =
+                    create_faucet_txn(&mut faucet_sk, mm_2_pk, quote, 1_000_000_000_000, 5);
 
-            let res = ledger_state.apply_block(&mut create_block(vec![user_base_drip_tx]));
-            ledger_state.apply_block(&mut create_block(vec![user_quote_drip_tx]));
-            ledger_state.apply_block(&mut create_block(vec![mm_1_base_drip_tx]));
-            ledger_state.apply_block(&mut create_block(vec![mm_1_quote_drip_tx]));
-            ledger_state.apply_block(&mut create_block(vec![mm_2_base_drip_tx]));
-            ledger_state.apply_block(&mut create_block(vec![mm_2_quote_drip_tx]));
+                let mut block_1 = create_block(vec![user_base_drip_tx]);
+                let mut block_2 = create_block(vec![user_quote_drip_tx]);
+                let mut block_3 = create_block(vec![mm_1_base_drip_tx]);
+                let mut block_4 = create_block(vec![mm_1_quote_drip_tx]);
+                let mut block_5 = create_block(vec![mm_2_base_drip_tx]);
+                let mut block_6 = create_block(vec![mm_2_quote_drip_tx]);
 
-            println!(
-                "{:#?}",
-                ledger_state
-                    .get_account_info_with_balances_or_default(&user_pk)
-                    .spot_balances
-            );
-            assert_eq!(
-                ledger_state
-                    .get_account_info_with_balances_or_default(&user_pk)
-                    .spot_balances
-                    .asset_balances[base as usize]
-                    .available_balance,
-                1_000_000_000
-            );
+                ledger_state.apply_block(&mut block_1);
+                ledger_state.apply_block(&mut block_2);
+                ledger_state.apply_block(&mut block_3);
+                ledger_state.apply_block(&mut block_4);
+                ledger_state.apply_block(&mut block_5);
+                ledger_state.apply_block(&mut block_6);
+            }
+
+            // Check user balances
+            {
+                let user_balance = ledger_state.get_account_info_with_balances_or_default(&user_pk);
+                assert_eq!(
+                    user_balance.spot_balances.asset_balances[base as usize].available_balance,
+                    1_000_000_000
+                );
+                assert_eq!(
+                    user_balance.spot_balances.asset_balances[quote as usize].available_balance,
+                    1_000_000_000_000
+                );
+
+                let mm_1_balance = ledger_state.get_account_info_with_balances_or_default(&mm_1_pk);
+                assert_eq!(
+                    mm_1_balance.spot_balances.asset_balances[base as usize].available_balance,
+                    1_000_000_000
+                );
+                assert_eq!(
+                    mm_1_balance.spot_balances.asset_balances[quote as usize].available_balance,
+                    1_000_000_000_000
+                );
+
+                let mm_2_balance = ledger_state.get_account_info_with_balances_or_default(&mm_2_pk);
+                assert_eq!(
+                    mm_2_balance.spot_balances.asset_balances[base as usize].available_balance,
+                    1_000_000_000
+                );
+                assert_eq!(
+                    mm_2_balance.spot_balances.asset_balances[quote as usize].available_balance,
+                    1_000_000_000_000
+                );
+            }
+
+            // setup market
+            {
+                // id 0
+                let mm_1_buy_1 = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Buy,
+                    OrderType::Limit(2_200, 700),
+                    mm_1_nonce,
+                );
+                mm_1_nonce += 1;
+
+                // id 1
+                let mm_2_buy_1 = create_order_txn(
+                    &mut mm_2_sk,
+                    0,
+                    OrderDirection::Buy,
+                    OrderType::Limit(2_300, 700),
+                    mm_2_nonce,
+                );
+                mm_2_nonce += 1;
+
+                // id 2
+                let mm_2_buy_2 = create_order_txn(
+                    &mut mm_2_sk,
+                    0,
+                    OrderDirection::Buy,
+                    OrderType::Limit(2_300, 400),
+                    mm_2_nonce,
+                );
+                mm_2_nonce += 1;
+
+                // id 3
+                let mm_2_buy_3 = create_order_txn(
+                    &mut mm_2_sk,
+                    0,
+                    OrderDirection::Buy,
+                    OrderType::Limit(2_300, 700),
+                    mm_2_nonce,
+                );
+                mm_2_nonce += 1;
+
+                // id 4
+                let mm_1_buy_2 = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Buy,
+                    OrderType::Limit(2_450, 1_000),
+                    mm_1_nonce,
+                );
+                mm_1_nonce += 1;
+
+                // id 5
+                let mm_1_sell_1 = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Limit(2_500, 600),
+                    mm_1_nonce,
+                );
+                mm_1_nonce += 1;
+
+                // id 6
+                let mm_2_sell_1 = create_order_txn(
+                    &mut mm_2_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Limit(2_500, 1_000),
+                    mm_2_nonce,
+                );
+                mm_2_nonce += 1;
+
+                // id 7
+                let mm_2_sell_2 = create_order_txn(
+                    &mut mm_2_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Limit(2_600, 1_200),
+                    mm_2_nonce,
+                );
+                mm_2_nonce += 1;
+
+                // id 8
+                let mm_1_sell_2 = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Limit(2_700, 700),
+                    mm_1_nonce,
+                );
+                mm_1_nonce += 1;
+
+                // id 9
+                let mm_1_sell_3 = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Limit(2_800, 300),
+                    mm_1_nonce,
+                );
+                mm_1_nonce += 1;
+
+                // id 10
+                let mm_1_sell_4 = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Limit(2_500, 300),
+                    mm_1_nonce,
+                );
+                mm_1_nonce += 1;
+
+                let mm_2_cancel_1 = create_cancel_txn(&mut mm_2_sk, 0, 5, mm_2_nonce);
+
+                let mm_1_cancel_1 = create_cancel_txn(&mut mm_1_sk, 0, 10, mm_1_nonce);
+
+                let mut block_1 = create_block(vec![mm_1_buy_1, mm_2_buy_1]);
+                let mut block_2 = create_block(vec![mm_1_buy_2, mm_2_buy_2]);
+                let mut block_3 = create_block(vec![mm_1_sell_1, mm_2_buy_3]);
+                let mut block_4 = create_block(vec![mm_2_sell_1, mm_1_sell_2]);
+                let mut block_5 = create_block(vec![mm_1_sell_3, mm_2_sell_2]);
+                let mut block_6 = create_block(vec![mm_2_cancel_1, mm_1_sell_4]);
+                let mut block_7 = create_block(vec![mm_1_cancel_1]);
+
+                ledger_state.apply_block(&mut block_1);
+                ledger_state.apply_block(&mut block_2);
+                ledger_state.apply_block(&mut block_3);
+                ledger_state.apply_block(&mut block_4);
+                ledger_state.apply_block(&mut block_5);
+                ledger_state.apply_block(&mut block_6);
+                ledger_state.apply_block(&mut block_7);
+
+                // Check account info state
+                {
+                    let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
+                    assert_eq!(mm_1_account_info.open_orders.len(), 5);
+
+                    let is_cancelled_still_in_open = mm_1_account_info
+                        .open_orders
+                        .iter()
+                        .find(|order| order.common.id == 10);
+                    assert!(is_cancelled_still_in_open.is_none());
+
+                    assert_eq!(mm_1_account_info.completed_orders.len(), 1);
+                    assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
+
+                    let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
+                    assert_eq!(mm_2_account_info.open_orders.len(), 4);
+
+                    let is_cancelled_still_in_open = mm_2_account_info
+                        .open_orders
+                        .iter()
+                        .find(|order| order.common.id == 5);
+                    assert!(is_cancelled_still_in_open.is_none());
+
+                    assert_eq!(mm_2_account_info.completed_orders.len(), 1);
+                    assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
+                }
+            }
 
             ledger_state
         }
 
         #[test]
-        pub fn test_test_setup() {
-            test_setup();
+        pub fn test_user_limit_order_without_fill() {
+            let mut ledger_state = test_setup();
+
+            let mut user_nonce = 0;
+
+            let mut user_sk = get_alice_sk();
+            let user_pk = user_sk.verifying_key().to_bytes();
+
+            // id 11
+            let user_buy_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Buy,
+                OrderType::Limit(2_300, 300),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            // id 12
+            let user_buy_2 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Buy,
+                OrderType::Limit(2_300, 400),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            // id 13
+            let user_sell_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Sell,
+                OrderType::Limit(2_600, 400),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            // id 14
+            let user_sell_2 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Sell,
+                OrderType::Limit(2_700, 400),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            let user_cancel_buy_2 = create_cancel_txn(&mut user_sk, 0, 12, user_nonce);
+            user_nonce += 1;
+
+            let user_cancel_sell_1 = create_cancel_txn(&mut user_sk, 0, 13, user_nonce);
+
+            let mut block_1 = create_block(vec![user_buy_1]);
+            let mut block_2 = create_block(vec![user_buy_2]);
+            let mut block_3 = create_block(vec![user_sell_1]);
+            let mut block_4 = create_block(vec![user_sell_2]);
+            let mut block_5 = create_block(vec![user_cancel_buy_2]);
+            let mut block_6 = create_block(vec![user_cancel_sell_1]);
+
+            ledger_state.apply_block(&mut block_1);
+            ledger_state.apply_block(&mut block_2);
+            ledger_state.apply_block(&mut block_3);
+            ledger_state.apply_block(&mut block_4);
+            ledger_state.apply_block(&mut block_5);
+            ledger_state.apply_block(&mut block_6);
+
+            println!("{:#?}", block_5);
+            println!("{:#?}", block_6);
+
+            // Check account info state
+            {
+                let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
+                assert_eq!(user_account_info.open_orders.len(), 2);
+
+                assert_eq!(user_account_info.completed_orders.len(), 2);
+                assert_eq!(user_account_info.completed_orders[0].get_id(), 12);
+                assert_eq!(user_account_info.completed_orders[1].get_id(), 13);
+            }
+        }
+
+        #[test]
+        pub fn test_user_limit_order_with_partial_fill() {
+            let mut ledger_state = test_setup();
+
+            let mut user_nonce = 0;
+
+            let mut user_sk = get_alice_sk();
+            let user_pk = user_sk.verifying_key().to_bytes();
+
+            // id 11
+            let user_buy_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Buy,
+                OrderType::Limit(2_500, 2_000),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            // id 13
+            let user_sell_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Sell,
+                OrderType::Limit(2_450, 1_000),
+                user_nonce,
+            );
+
+            let mut block_1 = create_block(vec![user_buy_1]);
+            let mut block_2 = create_block(vec![user_sell_1]);
+
+            ledger_state.apply_block(&mut block_1);
+            ledger_state.apply_block(&mut block_2);
+
+            // Check account info state
+            {
+                let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
+
+                assert_eq!(user_account_info.completed_orders.len(), 2);
+            }
         }
     }
 }
