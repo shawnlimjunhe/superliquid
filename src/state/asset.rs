@@ -1,6 +1,10 @@
+use serde::{Deserialize, Serialize};
+
 pub type AssetId = u32;
 
 type AssetIdCounter = AssetId;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Asset {
     pub asset_id: AssetId,
     pub asset_name: String,
@@ -17,7 +21,7 @@ impl AssetManager {
     pub fn new() -> Self {
         let asset_0 = Asset {
             asset_id: 0,
-            asset_name: "Supe".to_owned(),
+            asset_name: "SUPE".to_owned(),
             decimals: 6,
             lot_size: 1000,
         };

@@ -15,7 +15,10 @@ use crate::{
     hotstuff::utils,
     node::client::handler::{ClientResponse, QueryRequest},
     replica_debug, replica_log,
-    state::state::{AccountInfoWithBalances, LedgerState},
+    state::{
+        asset::Asset,
+        state::{AccountInfoWithBalances, LedgerState},
+    },
     types::{
         message::{ReplicaInBound, ReplicaOutbound},
         transaction::{PublicKeyHash, Sha256Hash, SignedTransaction},
@@ -126,6 +129,10 @@ impl HotStuffReplica {
     ) -> AccountInfoWithBalances {
         self.ledger_state
             .get_account_info_with_balances_or_default(public_key)
+    }
+
+    pub fn get_asset_info(&self) -> Vec<Asset> {
+        self.ledger_state.asset_manager.assets.clone()
     }
 
     pub fn vote_message(&mut self, node: &Block) -> HotStuffMessage {
@@ -712,11 +719,19 @@ impl HotStuffReplica {
 
     fn handle_query(&self, query_request: QueryRequest) {
         let query = query_request.query;
-        let account_info_with_balances = self.get_account_info_with_balances(&query.account);
-
-        let _ = query_request.response_channel.send(ClientResponse {
-            account_info_with_balances,
-        });
+        match query {
+            crate::node::client::handler::ClientQuery::AccountQuery(public_key) => {
+                let account_info_with_balances = self.get_account_info_with_balances(&public_key);
+                let client_response =
+                    ClientResponse::AccountQueryReponse(account_info_with_balances);
+                let _ = query_request.response_channel.send(client_response);
+            }
+            crate::node::client::handler::ClientQuery::AssetQuery => {
+                let asset_info = self.get_asset_info();
+                let client_response = ClientResponse::AssetQueryResponse(asset_info);
+                let _ = query_request.response_channel.send(client_response);
+            }
+        }
     }
 
     fn handle_transaction(&mut self, txn: SignedTransaction) {

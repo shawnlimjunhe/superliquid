@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
-use crate::state::asset::AssetId;
+use crate::state::asset::{Asset, AssetId};
 use crate::state::state::AccountInfoWithBalances;
 use crate::types::message::Message;
 use crate::types::transaction::{PublicKeyHash, Sha256Hash, SignedTransaction};
@@ -21,6 +21,9 @@ pub enum AppMessage {
     Ack,
     AccountQuery(PublicKeyHash),
     AccountQueryResponse(AccountInfoWithBalances),
+
+    AssetQuery,
+    AssetQueryResponse(Vec<Asset>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -101,6 +104,22 @@ pub async fn send_account_query(
         Some(Message::Application(AppMessage::AccountQueryResponse(account_info))) => {
             Ok(account_info)
         }
+        other => Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Expected Response, got {:?}", other),
+        )),
+    }
+}
+
+pub async fn send_assets_query(
+    reader: Arc<Mutex<OwnedReadHalf>>,
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+) -> Result<Vec<Asset>> {
+    let msg = AppMessage::AssetQuery;
+    send_message(writer, &Message::Application(msg)).await?;
+
+    match receive_message(reader).await? {
+        Some(Message::Application(AppMessage::AssetQueryResponse(assets))) => Ok(assets),
         other => Err(Error::new(
             ErrorKind::InvalidData,
             format!("Expected Response, got {:?}", other),

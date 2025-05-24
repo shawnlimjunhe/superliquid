@@ -1,4 +1,4 @@
-use std::io::Result;
+use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 
 use tokio::{
@@ -9,7 +9,10 @@ use tokio::{
 use crate::{
     message_protocol::{self, AppMessage, ControlMessage},
     node::{peer::broadcast::broadcast_transaction, state::Node},
-    state::{asset::AssetId, state::AccountInfoWithBalances},
+    state::{
+        asset::{Asset, AssetId},
+        state::AccountInfoWithBalances,
+    },
     types::{
         message::{Message, ReplicaInBound, mpsc_error},
         transaction::{
@@ -21,12 +24,15 @@ use crate::{
 
 use super::listener::ClientSocket;
 
-pub struct ClientQuery {
-    pub account: PublicKeyHash,
+pub enum ClientQuery {
+    AccountQuery(PublicKeyHash),
+    AssetQuery,
 }
 
-pub struct ClientResponse {
-    pub account_info_with_balances: AccountInfoWithBalances,
+#[derive(Debug)]
+pub enum ClientResponse {
+    AccountQueryReponse(AccountInfoWithBalances),
+    AssetQueryResponse(Vec<Asset>),
 }
 
 pub struct QueryRequest {
@@ -54,6 +60,9 @@ pub(super) async fn handle_client_connection(
             Some(Message::Application(AppMessage::AccountQuery(pk))) => {
                 handle_account_query(socket.writer.clone(), pk, to_replica_tx.clone()).await?;
             }
+            Some(Message::Application(AppMessage::AssetQuery)) => {
+                handle_asset_query(socket.writer.clone(), to_replica_tx.clone()).await?;
+            }
             Some(Message::Connection(ControlMessage::End)) => {
                 return Ok(());
             }
@@ -63,7 +72,7 @@ pub(super) async fn handle_client_connection(
 }
 
 pub(super) async fn send_query_to_replica(
-    pk_bytes: &PublicKeyHash,
+    query: ClientQuery,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<ClientResponse> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -71,7 +80,7 @@ pub(super) async fn send_query_to_replica(
     // Request info from replica to oneshot channel
     to_replica_tx
         .send(ReplicaInBound::Query(QueryRequest {
-            query: ClientQuery { account: *pk_bytes },
+            query,
             response_channel: response_tx,
         }))
         .await
@@ -89,15 +98,52 @@ pub(super) async fn handle_account_query(
     pk_bytes: PublicKeyHash,
     to_replica_tx: mpsc::Sender<ReplicaInBound>,
 ) -> Result<()> {
-    let response = send_query_to_replica(&pk_bytes, to_replica_tx).await?;
-    // send to client
-    message_protocol::send_message(
-        writer,
-        &&Message::Application(AppMessage::AccountQueryResponse(
-            response.account_info_with_balances,
-        )),
-    )
-    .await
+    let query = ClientQuery::AccountQuery(pk_bytes);
+    let response = send_query_to_replica(query, to_replica_tx).await?;
+
+    match response {
+        ClientResponse::AccountQueryReponse(account_info_with_balances) => {
+            // send to client
+            message_protocol::send_message(
+                writer,
+                &Message::Application(AppMessage::AccountQueryResponse(account_info_with_balances)),
+            )
+            .await?;
+        }
+        other => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Expected AccountQueryResponse, got {:?}", other),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn handle_asset_query(
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
+    let query = ClientQuery::AssetQuery;
+    let response = send_query_to_replica(query, to_replica_tx).await?;
+
+    match response {
+        ClientResponse::AssetQueryResponse(asset_info) => {
+            // send to client
+            message_protocol::send_message(
+                writer,
+                &Message::Application(AppMessage::AssetQueryResponse(asset_info)),
+            )
+            .await?;
+        }
+        other => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Expected AssetQueryResponse, got {:?}", other),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(super) async fn handle_drip(
@@ -109,14 +155,33 @@ pub(super) async fn handle_drip(
     let mut faucet_key = node.faucet_key.clone();
     let faucet_pk_bytes = faucet_key.verifying_key().to_bytes();
 
-    let response = send_query_to_replica(&faucet_pk_bytes, to_replica_tx.clone()).await?;
+    let query = ClientQuery::AccountQuery(faucet_pk_bytes);
+    let response = send_query_to_replica(query, to_replica_tx.clone()).await?;
 
-    let account_info = response.account_info_with_balances.account_info;
+    let account_info = match response {
+        ClientResponse::AccountQueryReponse(account_info_with_balances) => {
+            account_info_with_balances.account_info
+        }
+        other => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Expected AccountQueryResponse, got {:?}", other),
+            ));
+        }
+    };
+
+    let drip_amount = if asset_id == 0 {
+        1_000_000_000
+    } else if asset_id == 1 {
+        500_000_000
+    } else {
+        0
+    };
 
     let drip_txn = UnsignedTransaction::Transfer(TransferTransaction {
         to: pk_bytes,
         from: faucet_pk_bytes,
-        amount: 100000,
+        amount: drip_amount,
         asset_id,
         nonce: account_info.expected_nonce,
         status: TransactionStatus::Pending,

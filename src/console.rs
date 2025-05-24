@@ -11,7 +11,10 @@ use tokio::{net::tcp::OwnedWriteHalf, sync::Mutex};
 use crate::{
     client::ClientConnection,
     message_protocol::{self},
-    state::asset::AssetId,
+    state::{
+        asset::{Asset, AssetId},
+        spot_clearinghouse::AccountBalance,
+    },
     types::transaction::{
         PublicKeyString, TransactionStatus, TransferTransaction, UnsignedTransaction,
     },
@@ -34,6 +37,30 @@ impl ClientAccount {
             _pk: pk,
             pk_str,
         }
+    }
+}
+
+fn format_asset_balance(amount: u128, decimals: u8) -> String {
+    let float = amount as f64 / 10f64.powi(decimals as i32);
+    format!("{:.2}", float)
+}
+
+fn display_spot_balances(asset_infos: &Vec<Asset>, spot_balance: AccountBalance) {
+    for token_balance in &spot_balance.asset_balances {
+        let Some(asset) = asset_infos.get(token_balance.asset_id as usize) else {
+            println!(
+                "Could not find asset info for asset: {}",
+                token_balance.asset_id
+            );
+            continue;
+        };
+
+        println!(
+            "Asset: {}, Total: {}, Available: {}",
+            asset.asset_name,
+            format_asset_balance(token_balance.total_balance, asset.decimals),
+            format_asset_balance(token_balance.available_balance, asset.decimals)
+        );
     }
 }
 
@@ -75,13 +102,20 @@ async fn handle_drip(
     };
 
     let parts: Vec<&str> = trimmed["drip ".len()..].split_whitespace().collect();
-    if parts.len() != 2 {
-        println!("Usage: drip <asset>");
+    println!("{:#?}", parts);
+    if parts.len() != 1 {
+        println!("Usage: drip <SUPE | USD>");
+        return Ok(());
     }
 
-    let asset_id = parts[1]
-        .parse::<AssetId>()
-        .expect("To be non negative number");
+    let asset_id = match parts[0].to_uppercase().as_str() {
+        "SUPE" => 0,
+        "USD" => 1,
+        other => {
+            println!("Unknown asset: {}", other);
+            return Ok(());
+        }
+    };
 
     message_protocol::send_drip(client_writer, &client.pk_str.to_bytes(), asset_id).await?;
 
@@ -150,7 +184,7 @@ async fn handle_transfer(
 
     if amount > token_balance.available_balance {
         println!(
-            "Insufficient balance: Available balance{:?}",
+            "Insufficient balance: Available balance {:?}",
             token_balance.available_balance
         );
         return Ok(());
@@ -174,6 +208,7 @@ async fn handle_transfer(
 async fn handle_query(
     client: &Option<ClientAccount>,
     client_connection: &ClientConnection,
+    asset_infos: &Vec<Asset>,
 ) -> std::io::Result<()> {
     let Some(client) = client else {
         println!("Please create or load an account before transferring.");
@@ -187,12 +222,18 @@ async fn handle_query(
     )
     .await?;
 
-    println!(
-        "Account: {:?}, balances: {:?}",
-        client.pk_str, account_info_with_balances.spot_balances
-    );
+    println!("Account: {:?}", client.pk_str,);
+    display_spot_balances(asset_infos, account_info_with_balances.spot_balances);
 
     return Ok(());
+}
+
+async fn fetch_asset_infos(client_connection: &ClientConnection) -> std::io::Result<Vec<Asset>> {
+    message_protocol::send_assets_query(
+        client_connection.reader.clone(),
+        client_connection.writer.clone(),
+    )
+    .await
 }
 
 pub async fn run_console(addr: &str) -> std::io::Result<()> {
@@ -202,6 +243,7 @@ pub async fn run_console(addr: &str) -> std::io::Result<()> {
     println!("Type `help` to see commands.");
     let connection = ClientConnection::create_client_connection(addr).await?;
     let mut client_account = None;
+    let asset_infos = fetch_asset_infos(&connection).await?;
     loop {
         print!("> ");
         io::stdout().flush().unwrap();
@@ -219,7 +261,7 @@ pub async fn run_console(addr: &str) -> std::io::Result<()> {
             _ if trimmed.starts_with("drip") => {
                 handle_drip(trimmed, &client_account, connection.writer.clone()).await?;
             }
-            "query" => handle_query(&client_account, &connection).await?,
+            "query" => handle_query(&client_account, &connection, &asset_infos).await?,
             _ if trimmed.starts_with("transfer ") => {
                 handle_transfer(trimmed, &mut client_account, &connection).await?
             }
