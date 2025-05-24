@@ -225,7 +225,8 @@ impl SpotMarket {
                             continue;
                         }
 
-                        let order_remaining = order.base_lots - order.filled_base_lots;
+                        let order_remaining = order.get_order_remaining();
+
                         let curr_filled_base_amount = remaining_base_amount.min(order_remaining);
                         remaining_base_amount -= curr_filled_base_amount;
 
@@ -252,6 +253,7 @@ impl SpotMarket {
                                     price_multiple: level_price,
                                     account_public_key: order.common.account,
                                     filled_base_lots: curr_filled_base_amount,
+                                    self_fill: 0,
                                 });
                                 order.filled_base_lots += curr_filled_base_amount;
                             }
@@ -303,7 +305,7 @@ impl SpotMarket {
         // which will be the first element in the best price level
         let mut residual_order: Option<ResidualOrder> = None;
         let mut base_lots_in: u64 = 0;
-
+        let mut self_fill_quotes: u64 = 0;
         let mut remaining_quote_lots = buy_order.quote_size;
 
         while !levels.is_empty() && remaining_quote_lots > 0 {
@@ -317,6 +319,8 @@ impl SpotMarket {
             let mut level_cancelled = 0;
 
             let mut to_drain_end_index = 0;
+
+            // remaining base lots need as order size are stores in base size
             let mut remaining_base_lots =
                 quote_lots_to_base_lots(remaining_quote_lots, level_price, &precision);
 
@@ -331,8 +335,41 @@ impl SpotMarket {
                     continue;
                 }
 
-                let order_base_remaining = order.base_lots - order.filled_base_lots;
+                let order_base_remaining = order.get_order_remaining();
 
+                if order.common.account == buy_order.common.account {
+                    // self trade
+                    let reduce_base = remaining_base_lots.min(order_base_remaining);
+
+                    let reduce_quote = base_to_quote_lots(reduce_base, level_price, precision);
+
+                    order.self_filled += reduce_base;
+                    self_fill_quotes += reduce_quote;
+
+                    remaining_base_lots -= reduce_base;
+                    remaining_quote_lots -= reduce_quote;
+
+                    level_filled += reduce_base;
+
+                    if reduce_base == order_base_remaining {
+                        to_drain_end_index += 1;
+                    }
+
+                    if remaining_base_lots <= 0 {
+                        if reduce_base < order_base_remaining {
+                            // residual order
+                            residual_order = Some(ResidualOrder {
+                                order_id: order.common.id,
+                                price_multiple: level_price,
+                                account_public_key: order.common.account,
+                                filled_base_lots: 0,
+                                self_fill: reduce_base,
+                            });
+                        }
+                        break;
+                    }
+                    continue;
+                }
                 let filled_base_lots = remaining_base_lots.min(order_base_remaining);
                 remaining_base_lots -= filled_base_lots;
                 level_filled += filled_base_lots;
@@ -360,6 +397,7 @@ impl SpotMarket {
                             price_multiple: level_price,
                             account_public_key: order.common.account,
                             filled_base_lots,
+                            self_fill: 0,
                         });
                         order.filled_base_lots += filled_base_lots;
                     }
@@ -381,9 +419,10 @@ impl SpotMarket {
 
         // Return execution results for clearinghouse to settle
         return MarketOrderMatchingResults::Buy {
-            quote_filled_lots: buy_order.quote_size - remaining_quote_lots,
+            quote_filled_lots: buy_order.quote_size - remaining_quote_lots - self_fill_quotes,
             base_lots_in,
             filled_orders,
+            self_fill: self_fill_quotes,
             residual_order,
             order_id: buy_order.common.id,
         };
@@ -400,17 +439,18 @@ impl SpotMarket {
         // We can have at most 1 partially filled order for the counter_party
         // which will be the first element in the best price level
         let mut maker_partial_fill: Option<ResidualOrder> = None;
-        let mut base_amount_in: u64 = 0;
+        let mut quote_lots_in: u64 = 0;
+        let mut self_fill: u64 = 0;
 
-        let mut remaining_base_amount = sell_order.base_size;
+        let mut remaining_base_lots = sell_order.base_size;
 
-        while !levels.is_empty() && remaining_base_amount > 0 {
+        while !levels.is_empty() && remaining_base_lots > 0 {
             let level = levels.last_mut();
             let Some(level) = level else {
                 break;
             };
             let level_price = level.price;
-            let level_filled = remaining_base_amount;
+            let level_filled = remaining_base_lots;
             let mut cancelled_seen = 0;
 
             let mut to_drain_end_index = 0;
@@ -420,29 +460,59 @@ impl SpotMarket {
                     to_drain_end_index += 1;
                     continue;
                 }
-                let order_remaining = order.base_lots - order.filled_base_lots;
-                let filled_quote_amount = remaining_base_amount.min(order_remaining);
-                remaining_base_amount -= filled_quote_amount;
+
+                let order_remaining = order.get_order_remaining();
+
+                if order.common.account == sell_order.common.account {
+                    // self trade
+                    let reduce = remaining_base_lots.min(order_remaining);
+                    self_fill += reduce;
+                    remaining_base_lots -= reduce;
+                    order.self_filled += reduce;
+
+                    if reduce == order_remaining {
+                        to_drain_end_index += 1;
+                    }
+
+                    if remaining_base_lots <= 0 {
+                        if reduce < order_remaining {
+                            // Residual order
+                            maker_partial_fill = Some(ResidualOrder {
+                                order_id: order.common.id,
+                                price_multiple: level_price,
+                                account_public_key: order.common.account,
+                                filled_base_lots: 0,
+                                self_fill: reduce,
+                            });
+                        }
+                        break;
+                    }
+                    continue;
+                }
+
+                let filled_base_lots = remaining_base_lots.min(order_remaining);
+                remaining_base_lots -= filled_base_lots;
                 // Don't modify the order's filled amount here as we are using it
                 // to determine the filled amount when settling the order
 
-                base_amount_in += base_to_quote_lots(filled_quote_amount, level_price, precision);
+                quote_lots_in += base_to_quote_lots(filled_base_lots, level_price, precision);
 
-                if filled_quote_amount == order_remaining {
+                if filled_base_lots == order_remaining {
                     // include current index
                     to_drain_end_index += 1;
                 }
 
-                if remaining_base_amount <= 0 {
-                    if filled_quote_amount < order_remaining {
-                        // Partial fill
+                if remaining_base_lots <= 0 {
+                    if filled_base_lots < order_remaining {
+                        // Residual order
                         maker_partial_fill = Some(ResidualOrder {
                             order_id: order.common.id,
                             price_multiple: level_price,
                             account_public_key: order.common.account,
-                            filled_base_lots: filled_quote_amount,
+                            filled_base_lots,
+                            self_fill: 0,
                         });
-                        order.filled_base_lots += filled_quote_amount;
+                        order.filled_base_lots += filled_base_lots;
                     }
                     break;
                 }
@@ -464,8 +534,9 @@ impl SpotMarket {
         return MarketOrderMatchingResults::Sell {
             filled_orders,
             residual_order: maker_partial_fill,
-            base_filled_lots: sell_order.base_size - remaining_base_amount,
-            quote_lots_in: base_amount_in,
+            base_filled_lots: sell_order.base_size - remaining_base_lots - self_fill,
+            quote_lots_in,
+            self_fill,
             order_id: sell_order.common.id,
         };
     }
@@ -584,46 +655,50 @@ mod tests {
         lot_size: u64,
         direction: OrderDirection,
         id: OrderId,
+        account: PublicKeyHash,
     ) -> LimitOrder {
         LimitOrder {
             price_multiple: price_tick,
             base_lots: lot_size,
             filled_base_lots: 0,
+            self_filled: 0,
             common: CommonOrderFields {
                 id,
                 market_id: 0,
                 status: OrderStatus::Open,
-                account: PublicKeyHash::default(),
+                account,
                 direction,
             },
         }
     }
 
-    fn make_market_buy_order(id: OrderId, quote_size: u64) -> MarketOrder {
+    fn make_market_buy_order(id: OrderId, quote_size: u64, account: PublicKeyHash) -> MarketOrder {
         MarketOrder::Buy(MarketBuyOrder {
             quote_size,
             filled_size: 0,
             average_execution_price: 0,
+            self_filled: 0,
             common: CommonOrderFields {
                 id,
                 market_id: 0,
                 status: OrderStatus::Open,
-                account: PublicKeyHash::default(),
+                account,
                 direction: OrderDirection::Buy,
             },
         })
     }
 
-    fn make_market_sell_order(id: OrderId, base_size: u64) -> MarketOrder {
+    fn make_market_sell_order(id: OrderId, base_size: u64, account: PublicKeyHash) -> MarketOrder {
         MarketOrder::Sell(MarketSellOrder {
             base_size,
             filled_size: 0,
             average_execution_price: 0,
+            self_filled: 0,
             common: CommonOrderFields {
                 id,
                 market_id: 0,
                 status: OrderStatus::Open,
-                account: PublicKeyHash::default(),
+                account,
                 direction: OrderDirection::Sell,
             },
         })
@@ -650,27 +725,33 @@ mod tests {
     }
 
     mod test_limit_orders {
-        use crate::state::{
-            order::{OrderDirection, OrderStatus},
-            spot_clearinghouse::MarketPrecision,
-            spot_market::{SpotMarket, tests::new_limit},
+        use crate::{
+            state::{
+                order::{OrderDirection, OrderStatus},
+                spot_clearinghouse::MarketPrecision,
+                spot_market::{SpotMarket, tests::new_limit},
+            },
+            types::transaction::PublicKeyHash,
         };
+
+        use super::{make_market_buy_order, make_market_sell_order};
 
         #[test]
         fn test_add_bid_order_inserts_correctly() {
             let mut market = SpotMarket::test_new(100, 2);
 
-            let precision = MarketPrecision {
+            let mp = MarketPrecision {
                 base_lot_size: 100,
                 quote_lot_size: 100,
                 tick: market.tick,
                 tick_decimals: market.tick_decimals,
             };
+            let account = PublicKeyHash::default();
 
-            market.add_limit_helper(new_limit(100, 10, OrderDirection::Buy, 1), &precision);
-            market.add_limit_helper(new_limit(105, 5, OrderDirection::Buy, 2), &precision);
-            market.add_limit_helper(new_limit(103, 7, OrderDirection::Buy, 3), &precision);
-            market.add_limit_helper(new_limit(1, 7, OrderDirection::Buy, 4), &precision);
+            market.add_limit_helper(new_limit(100, 10, OrderDirection::Buy, 1, account), &mp);
+            market.add_limit_helper(new_limit(105, 5, OrderDirection::Buy, 2, account), &mp);
+            market.add_limit_helper(new_limit(103, 7, OrderDirection::Buy, 3, account), &mp);
+            market.add_limit_helper(new_limit(1, 7, OrderDirection::Buy, 4, account), &mp);
 
             assert_eq!(market.bids_levels.len(), 4);
             assert_eq!(market.bids_levels.last().unwrap().price, 105);
@@ -681,18 +762,19 @@ mod tests {
         #[test]
         fn test_add_ask_order_inserts_correctly() {
             let mut market = SpotMarket::test_new(100, 2);
-            let precision = MarketPrecision {
+            let mp = MarketPrecision {
                 base_lot_size: 100,
                 quote_lot_size: 100,
                 tick: market.tick,
                 tick_decimals: market.tick_decimals,
             };
 
-            market.add_limit_helper(new_limit(110, 8, OrderDirection::Sell, 1), &precision);
-            market.add_limit_helper(new_limit(1000, 8, OrderDirection::Sell, 2), &precision);
-            market.add_limit_helper(new_limit(1000, 10, OrderDirection::Sell, 5), &precision);
-            market.add_limit_helper(new_limit(107, 6, OrderDirection::Sell, 3), &precision);
-            market.add_limit_helper(new_limit(109, 4, OrderDirection::Sell, 4), &precision);
+            let account = PublicKeyHash::default();
+            market.add_limit_helper(new_limit(110, 8, OrderDirection::Sell, 1, account), &mp);
+            market.add_limit_helper(new_limit(1000, 8, OrderDirection::Sell, 2, account), &mp);
+            market.add_limit_helper(new_limit(1000, 10, OrderDirection::Sell, 5, account), &mp);
+            market.add_limit_helper(new_limit(107, 6, OrderDirection::Sell, 3, account), &mp);
+            market.add_limit_helper(new_limit(109, 4, OrderDirection::Sell, 4, account), &mp);
 
             assert_eq!(market.asks_levels.len(), 4);
             assert_eq!(market.asks_levels.last().unwrap().price, 107);
@@ -702,36 +784,40 @@ mod tests {
             assert_eq!(market.asks_levels[0].volume, 18); // price 1000
         }
 
-        fn setup_test_market(market: &mut SpotMarket, precision: &MarketPrecision) {
+        fn setup_test_market(market: &mut SpotMarket, mp: &MarketPrecision) {
+            let mm = [1; 32];
             // Sells
-            market.add_limit_helper(new_limit(2_500, 1100, OrderDirection::Sell, 1), precision);
-            market.add_limit_helper(new_limit(2_500, 800, OrderDirection::Sell, 2), precision);
+            market.add_limit_helper(new_limit(2_500, 1100, OrderDirection::Sell, 1, mm), mp);
+            market.add_limit_helper(new_limit(2_500, 800, OrderDirection::Sell, 2, mm), mp);
             // Cancelled order
-            market.add_limit_helper(new_limit(2_550, 1000, OrderDirection::Sell, 3), precision);
-            market.add_limit_helper(new_limit(2_550, 600, OrderDirection::Sell, 4), precision);
-            market.add_limit_helper(new_limit(2_700, 800, OrderDirection::Sell, 5), precision);
-            market.add_limit_helper(new_limit(2_800, 400, OrderDirection::Sell, 6), precision);
+            market.add_limit_helper(new_limit(2_550, 1000, OrderDirection::Sell, 3, mm), mp);
+            market.add_limit_helper(new_limit(2_550, 600, OrderDirection::Sell, 4, mm), mp);
+            market.add_limit_helper(new_limit(2_700, 800, OrderDirection::Sell, 5, mm), mp);
+            market.add_limit_helper(new_limit(2_800, 400, OrderDirection::Sell, 6, mm), mp);
 
-            market.cancel_order(&new_limit(2_550, 1000, OrderDirection::Sell, 3));
+            market.cancel_order(&new_limit(2_550, 1000, OrderDirection::Sell, 3, mm));
             // total size
 
             // Buys
-            market.add_limit_helper(new_limit(2_000, 1100, OrderDirection::Buy, 7), &precision);
-            market.add_limit_helper(new_limit(2_000, 800, OrderDirection::Buy, 8), &precision);
+            market.add_limit_helper(new_limit(2_000, 1100, OrderDirection::Buy, 7, mm), &mp);
+            market.add_limit_helper(new_limit(2_000, 800, OrderDirection::Buy, 8, mm), &mp);
             // Cancelled order
-            market.add_limit_helper(new_limit(2_200, 1_000, OrderDirection::Buy, 9), &precision);
-            market.add_limit_helper(new_limit(2_200, 600, OrderDirection::Buy, 10), &precision);
-            market.add_limit_helper(new_limit(2_300, 800, OrderDirection::Buy, 11), &precision);
-            market.add_limit_helper(new_limit(2400, 400, OrderDirection::Buy, 12), &precision);
+            market.add_limit_helper(new_limit(2_200, 1_000, OrderDirection::Buy, 9, mm), &mp);
+            market.add_limit_helper(new_limit(2_200, 600, OrderDirection::Buy, 10, mm), &mp);
+            market.add_limit_helper(new_limit(2_300, 800, OrderDirection::Buy, 11, mm), &mp);
+            market.add_limit_helper(new_limit(2400, 400, OrderDirection::Buy, 12, mm), &mp);
 
-            market.cancel_order(&new_limit(2_200, 1000, OrderDirection::Buy, 9));
+            market.cancel_order(&new_limit(2_200, 1000, OrderDirection::Buy, 9, mm));
         }
 
         mod test_limit_execution {
-            use crate::state::{
-                order::{OrderDirection, OrderStatus},
-                spot_clearinghouse::MarketPrecision,
-                spot_market::{SpotMarket, tests::new_limit},
+            use crate::{
+                state::{
+                    order::{OrderDirection, OrderStatus},
+                    spot_clearinghouse::MarketPrecision,
+                    spot_market::{SpotMarket, tests::new_limit},
+                },
+                types::transaction::PublicKeyHash,
             };
 
             use super::setup_test_market;
@@ -752,6 +838,7 @@ mod tests {
 
                 setup_test_market(&mut market, &precision);
 
+                let account = PublicKeyHash::default();
                 // Check market state before execution
                 {
                     assert_eq!(market.get_best_prices(), (Some(2_400), Some(2_500)));
@@ -766,7 +853,7 @@ mod tests {
                 }
 
                 let order_lot_size = 2_000;
-                let order = new_limit(2_550, order_lot_size, OrderDirection::Buy, 7);
+                let order = new_limit(2_550, order_lot_size, OrderDirection::Buy, 7, account);
                 let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
 
                 let Some(result) = limit_fill_result else {
@@ -843,6 +930,8 @@ mod tests {
 
                 setup_test_market(&mut market, &precision);
 
+                let account = PublicKeyHash::default();
+
                 // Check market state before execution
                 {
                     assert_eq!(market.get_best_prices(), (Some(2_400), Some(2_500)));
@@ -852,7 +941,7 @@ mod tests {
                     assert_eq!(market.bids_levels.last().unwrap().price, 2_400);
                 }
 
-                let order = new_limit(2_650, 5_000, OrderDirection::Buy, 7);
+                let order = new_limit(2_650, 5_000, OrderDirection::Buy, 7, account);
                 let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
 
                 let Some(result) = limit_fill_result else {
@@ -923,6 +1012,7 @@ mod tests {
                 // Asks
                 setup_test_market(&mut market, &precision);
 
+                let account = PublicKeyHash::default();
                 // Check market state before execution
                 {
                     assert_eq!(market.get_best_prices(), (Some(2_400), Some(2_500)));
@@ -933,7 +1023,7 @@ mod tests {
                 }
 
                 // fully consume the order book
-                let order = new_limit(3_550, 4_000, OrderDirection::Buy, 7);
+                let order = new_limit(3_550, 4_000, OrderDirection::Buy, 7, account);
                 let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
 
                 let Some(result) = limit_fill_result else {
@@ -997,6 +1087,7 @@ mod tests {
                     tick,
                     tick_decimals,
                 };
+                let account = PublicKeyHash::default();
 
                 setup_test_market(&mut market, &precision);
 
@@ -1013,7 +1104,7 @@ mod tests {
                 }
 
                 let order_lot_size = 1_400;
-                let order = new_limit(2_200, 1_400, OrderDirection::Sell, 7);
+                let order = new_limit(2_200, 1_400, OrderDirection::Sell, 7, account);
                 let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
 
                 let Some(result) = limit_fill_result else {
@@ -1087,6 +1178,7 @@ mod tests {
                     tick_decimals,
                 };
 
+                let account = PublicKeyHash::default();
                 // Asks
 
                 setup_test_market(&mut market, &precision);
@@ -1099,7 +1191,7 @@ mod tests {
                     assert_eq!(market.bids_levels.len(), 4);
                 }
 
-                let order = new_limit(2_100, 5_000, OrderDirection::Sell, 13);
+                let order = new_limit(2_100, 5_000, OrderDirection::Sell, 13, account);
                 let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
 
                 let Some(result) = limit_fill_result else {
@@ -1162,6 +1254,8 @@ mod tests {
                     tick_decimals,
                 };
 
+                let account = PublicKeyHash::default();
+
                 setup_test_market(&mut market, &precision);
                 // Check market state before execution
                 {
@@ -1171,7 +1265,7 @@ mod tests {
                     assert_eq!(market.bids_levels.len(), 4);
                 }
 
-                let order = new_limit(2_000, 5_000, OrderDirection::Sell, 7);
+                let order = new_limit(2_000, 5_000, OrderDirection::Sell, 7, account);
                 let limit_fill_result = market.add_limit_order(order, 0, 1, &precision);
 
                 let Some(result) = limit_fill_result else {
@@ -1223,13 +1317,17 @@ mod tests {
         }
 
         mod test_market_execution {
-            use crate::state::{
-                order::{MarketOrderMatchingResults, OrderDirection, OrderStatus},
-                spot_clearinghouse::MarketPrecision,
-                spot_market::{
-                    SpotMarket,
-                    tests::{make_market_buy_order, make_market_sell_order, new_limit},
+
+            use crate::{
+                state::{
+                    order::{MarketOrderMatchingResults, OrderDirection, OrderStatus},
+                    spot_clearinghouse::MarketPrecision,
+                    spot_market::{
+                        SpotMarket,
+                        tests::{make_market_buy_order, make_market_sell_order, new_limit},
+                    },
                 },
+                types::transaction::PublicKeyHash,
             };
 
             use super::setup_test_market;
@@ -1246,15 +1344,23 @@ mod tests {
                     tick_decimals,
                 };
 
-                market.add_limit_helper(new_limit(2_500, 1100, OrderDirection::Buy, 1), &precision);
-                market.add_limit_helper(new_limit(2_500, 800, OrderDirection::Buy, 2), &precision);
+                let account = PublicKeyHash::default();
+
+                market.add_limit_helper(
+                    new_limit(2_500, 1100, OrderDirection::Buy, 1, account),
+                    &precision,
+                );
+                market.add_limit_helper(
+                    new_limit(2_500, 800, OrderDirection::Buy, 2, account),
+                    &precision,
+                );
 
                 // Check market state before execution
                 {
                     assert_eq!(market.get_best_prices(), (Some(2_500), None));
                 }
 
-                let order = make_market_buy_order(3, 2000);
+                let order = make_market_buy_order(3, 2000, account);
                 let market_result = market.handle_market_order(order, &precision);
 
                 match market_result {
@@ -1265,6 +1371,7 @@ mod tests {
                         base_lots_in,
                         filled_orders,
                         residual_order,
+                        self_fill: _,
                     } => {
                         assert_eq!(market.get_best_prices(), (Some(2500), None));
                         assert_eq!(order_id, 3);
@@ -1304,7 +1411,7 @@ mod tests {
                     assert_eq!(market.asks_levels.get(2).unwrap().cancelled, 1);
                 }
 
-                let order = make_market_buy_order(3, 5_050_000);
+                let order = make_market_buy_order(3, 5_050_000, PublicKeyHash::default());
                 let market_result = market.handle_market_order(order, &precision);
 
                 match market_result {
@@ -1315,6 +1422,7 @@ mod tests {
                         base_lots_in,
                         filled_orders,
                         residual_order,
+                        self_fill: _,
                     } => {
                         // Check market state
                         {
@@ -1342,7 +1450,7 @@ mod tests {
             }
 
             #[test]
-            fn test_market_sell_no_fill() {
+            fn test_market_buy_fully_filled_with_residual_order_and_self_fill() {
                 let tick = 100;
                 let tick_decimals = 2;
                 let mut market = SpotMarket::test_new(tick, tick_decimals);
@@ -1353,16 +1461,89 @@ mod tests {
                     tick_decimals,
                 };
 
-                market
-                    .add_limit_helper(new_limit(2_500, 1100, OrderDirection::Sell, 1), &precision);
-                market.add_limit_helper(new_limit(2_500, 800, OrderDirection::Sell, 2), &precision);
+                setup_test_market(&mut market, &precision);
+
+                // partially buy 800
+                let order = make_market_buy_order(3, 2_000_000, [1; 32]);
+                market.handle_market_order(order, &precision);
+
+                // Check market state before execution
+                {
+                    assert_eq!(market.get_best_prices(), (Some(2_400), Some(2_500)));
+
+                    assert_eq!(market.asks_levels.len(), 4);
+                    assert_eq!(market.bids_levels.len(), 4);
+                    assert_eq!(market.bids_levels.last().unwrap().price, 2_400);
+
+                    assert_eq!(market.asks_levels.get(3).unwrap().volume, 1100);
+                }
+                // partially buy 800
+                let order = make_market_buy_order(4, 3_000_000, [0; 32]);
+                let market_result = market.handle_market_order(order, &precision);
+
+                match market_result {
+                    MarketOrderMatchingResults::Sell { .. } => panic!("Expected Buy"),
+                    MarketOrderMatchingResults::Buy {
+                        order_id,
+                        quote_filled_lots,
+                        base_lots_in,
+                        filled_orders,
+                        residual_order,
+                        self_fill: _,
+                    } => {
+                        // Check market state
+                        {
+                            assert_eq!(market.get_best_prices(), (Some(2400), Some(2550)));
+                            assert_eq!(market.bids_levels.len(), 4);
+                            assert_eq!(market.asks_levels.len(), 3);
+                            // Should buy 100 of this level;
+                            assert_eq!(market.asks_levels.last().unwrap().volume, 502);
+                        }
+
+                        assert_eq!(order_id, 4);
+
+                        assert_eq!(quote_filled_lots, 2_500 * 1_100 + 2_550 * 98);
+                        assert_eq!(base_lots_in, 1100 + 98);
+                        assert_eq!(filled_orders.len(), 3);
+
+                        let Some(residual_order) = residual_order else {
+                            panic!("Expected to have residual order");
+                        };
+
+                        assert_eq!(residual_order.filled_base_lots, 98);
+                        assert_eq!(residual_order.price_multiple, 2_550);
+                    }
+                }
+            }
+
+            #[test]
+            fn test_market_sell_no_fill() {
+                let tick = 100;
+                let tick_decimals = 2;
+                let mut market = SpotMarket::test_new(tick, tick_decimals);
+                let precision = MarketPrecision {
+                    base_lot_size: 10,
+                    quote_lot_size: 10,
+                    tick,
+                    tick_decimals,
+                };
+                let account = PublicKeyHash::default();
+
+                market.add_limit_helper(
+                    new_limit(2_500, 1100, OrderDirection::Sell, 1, account),
+                    &precision,
+                );
+                market.add_limit_helper(
+                    new_limit(2_500, 800, OrderDirection::Sell, 2, account),
+                    &precision,
+                );
 
                 // Check market state before execution
                 {
                     assert_eq!(market.get_best_prices(), (None, Some(2_500)));
                 }
 
-                let order = make_market_sell_order(3, 2400);
+                let order = make_market_sell_order(3, 2400, account);
                 let market_result = market.handle_market_order(order, &precision);
 
                 match market_result {
@@ -1373,6 +1554,7 @@ mod tests {
                         quote_lots_in,
                         filled_orders,
                         residual_order,
+                        self_fill: _,
                     } => {
                         assert_eq!(market.get_best_prices(), (None, Some(2_500)));
                         assert_eq!(order_id, 3);
@@ -1412,7 +1594,7 @@ mod tests {
                     assert_eq!(market.asks_levels.get(2).unwrap().cancelled, 1);
                 }
 
-                let order = make_market_sell_order(3, 1400);
+                let order = make_market_sell_order(3, 1400, PublicKeyHash::default());
                 let market_result = market.handle_market_order(order, &precision);
 
                 match market_result {
@@ -1423,6 +1605,7 @@ mod tests {
                         residual_order,
                         base_filled_lots,
                         quote_lots_in,
+                        self_fill: _,
                     } => {
                         // Check market state
                         {
@@ -1452,6 +1635,79 @@ mod tests {
                     }
                 }
             }
+
+            #[test]
+            fn test_market_sell_fully_filled_with_residual() {
+                let tick = 100;
+                let tick_decimals = 2;
+                let mut market = SpotMarket::test_new(tick, tick_decimals);
+                let precision = MarketPrecision {
+                    base_lot_size: 10,
+                    quote_lot_size: 10,
+                    tick,
+                    tick_decimals,
+                };
+
+                setup_test_market(&mut market, &precision);
+
+                let order = make_market_sell_order(2, 100, [1; 32]);
+                market.handle_market_order(order, &precision);
+                // Check market state before execution
+                {
+                    assert_eq!(market.get_best_prices(), (Some(2_400), Some(2_500)));
+
+                    assert_eq!(market.asks_levels.len(), 4);
+                    assert_eq!(market.bids_levels.len(), 4);
+                    assert_eq!(market.bids_levels.last().unwrap().price, 2_400);
+                    assert_eq!(market.bids_levels.last().unwrap().volume, 300);
+
+                    // Check state of the level that limit order will fill to
+                    assert_eq!(market.asks_levels.get(2).unwrap().volume, 600);
+                    assert_eq!(market.asks_levels.get(2).unwrap().cancelled, 1);
+                }
+
+                let order = make_market_sell_order(3, 1400, PublicKeyHash::default());
+                let market_result = market.handle_market_order(order, &precision);
+
+                match market_result {
+                    MarketOrderMatchingResults::Buy { .. } => panic!("Expected Sell"),
+                    MarketOrderMatchingResults::Sell {
+                        order_id,
+                        filled_orders,
+                        residual_order,
+                        base_filled_lots,
+                        quote_lots_in,
+                        self_fill: _,
+                    } => {
+                        // Check market state
+                        {
+                            assert_eq!(market.get_best_prices(), (Some(2_200), Some(2_500)));
+                            assert_eq!(market.bids_levels.len(), 2);
+                            assert_eq!(market.asks_levels.len(), 4);
+                            // Should buy 300 of this level;
+                            assert_eq!(market.bids_levels.last().unwrap().volume, 300);
+                        }
+
+                        assert_eq!(order_id, 3);
+
+                        assert_eq!(base_filled_lots, 1_400);
+                        assert_eq!(quote_lots_in, 2_400 * 300 + 2_300 * 800 + 2_200 * 300);
+                        assert_eq!(filled_orders.len(), 3);
+                        assert_eq!(filled_orders[0].self_filled, 100);
+                        assert_eq!(
+                            filled_orders.get(2).unwrap().common.status,
+                            OrderStatus::Cancelled
+                        );
+
+                        let Some(residual_order) = residual_order else {
+                            panic!("Expected to have residual order");
+                        };
+
+                        assert_eq!(residual_order.filled_base_lots, 300);
+                        assert_eq!(residual_order.price_multiple, 2_200);
+                    }
+                }
+            }
         }
 
         #[test]
@@ -1463,8 +1719,17 @@ mod tests {
                 tick: market.tick,
                 tick_decimals: market.tick_decimals,
             };
-            market.add_limit_helper(new_limit(100, 10, OrderDirection::Buy, 1), &precision);
-            market.add_limit_helper(new_limit(100, 15, OrderDirection::Buy, 2), &precision);
+
+            let account = PublicKeyHash::default();
+
+            market.add_limit_helper(
+                new_limit(100, 10, OrderDirection::Buy, 1, account),
+                &precision,
+            );
+            market.add_limit_helper(
+                new_limit(100, 15, OrderDirection::Buy, 2, account),
+                &precision,
+            );
             assert_eq!(market.bids_levels.len(), 1);
             assert_eq!(market.bids_levels[0].volume, 25);
             assert_eq!(market.bids_levels[0].orders.len(), 2);
@@ -1480,24 +1745,26 @@ mod tests {
         #[test]
         fn test_cancels_ask_order_correctly() {
             let mut market = SpotMarket::test_new(100, 2);
-            let precision = MarketPrecision {
+            let mp = MarketPrecision {
                 base_lot_size: 100,
                 quote_lot_size: 100,
                 tick: market.tick,
                 tick_decimals: market.tick_decimals,
             };
 
-            market.add_limit_helper(new_limit(1000, 8, OrderDirection::Sell, 2), &precision);
-            market.add_limit_helper(new_limit(107, 6, OrderDirection::Sell, 3), &precision);
-            market.add_limit_helper(new_limit(110, 8, OrderDirection::Sell, 1), &precision);
-            market.add_limit_helper(new_limit(109, 4, OrderDirection::Sell, 4), &precision);
-            market.add_limit_helper(new_limit(1000, 10, OrderDirection::Sell, 5), &precision);
-            market.add_limit_helper(new_limit(1000, 9, OrderDirection::Sell, 6), &precision);
-            market.add_limit_helper(new_limit(1000, 19, OrderDirection::Sell, 7), &precision);
+            let account = PublicKeyHash::default();
+
+            market.add_limit_helper(new_limit(1000, 8, OrderDirection::Sell, 2, account), &mp);
+            market.add_limit_helper(new_limit(107, 6, OrderDirection::Sell, 3, account), &mp);
+            market.add_limit_helper(new_limit(110, 8, OrderDirection::Sell, 1, account), &mp);
+            market.add_limit_helper(new_limit(109, 4, OrderDirection::Sell, 4, account), &mp);
+            market.add_limit_helper(new_limit(1000, 10, OrderDirection::Sell, 5, account), &mp);
+            market.add_limit_helper(new_limit(1000, 9, OrderDirection::Sell, 6, account), &mp);
+            market.add_limit_helper(new_limit(1000, 19, OrderDirection::Sell, 7, account), &mp);
             assert_eq!(market.asks_levels.len(), 4);
             assert_eq!(market.bids_levels.len(), 0);
 
-            market.cancel_order(&new_limit(1000, 8, OrderDirection::Sell, 5));
+            market.cancel_order(&new_limit(1000, 8, OrderDirection::Sell, 5, account));
             let price_level = &market.asks_levels[0];
             println!("{:?}", price_level.orders);
             assert_eq!(price_level.orders.len(), 4);
@@ -1508,23 +1775,24 @@ mod tests {
         #[test]
         fn test_cancels_buy_order_correctly() {
             let mut market = SpotMarket::test_new(100, 2);
-            let precision = MarketPrecision {
+            let mp = MarketPrecision {
                 base_lot_size: 100,
                 quote_lot_size: 100,
                 tick: market.tick,
                 tick_decimals: market.tick_decimals,
             };
+            let account = PublicKeyHash::default();
 
-            market.add_limit_helper(new_limit(1, 8, OrderDirection::Buy, 1), &precision);
-            market.add_limit_helper(new_limit(3, 8, OrderDirection::Buy, 2), &precision);
-            market.add_limit_helper(new_limit(4, 6, OrderDirection::Buy, 3), &precision);
-            market.add_limit_helper(new_limit(3, 4, OrderDirection::Buy, 4), &precision);
-            market.add_limit_helper(new_limit(8, 10, OrderDirection::Buy, 5), &precision);
-            market.add_limit_helper(new_limit(3, 9, OrderDirection::Buy, 6), &precision);
+            market.add_limit_helper(new_limit(1, 8, OrderDirection::Buy, 1, account), &mp);
+            market.add_limit_helper(new_limit(3, 8, OrderDirection::Buy, 2, account), &mp);
+            market.add_limit_helper(new_limit(4, 6, OrderDirection::Buy, 3, account), &mp);
+            market.add_limit_helper(new_limit(3, 4, OrderDirection::Buy, 4, account), &mp);
+            market.add_limit_helper(new_limit(8, 10, OrderDirection::Buy, 5, account), &mp);
+            market.add_limit_helper(new_limit(3, 9, OrderDirection::Buy, 6, account), &mp);
             assert_eq!(market.bids_levels.len(), 4);
             assert_eq!(market.asks_levels.len(), 0);
 
-            market.cancel_order(&new_limit(3, 9, OrderDirection::Buy, 6));
+            market.cancel_order(&new_limit(3, 9, OrderDirection::Buy, 6, account));
             let price_level = &market.bids_levels[1];
             assert_eq!(price_level.orders[2].common.status, OrderStatus::Cancelled);
             assert_eq!(price_level.cancelled, 1);
@@ -1533,26 +1801,28 @@ mod tests {
         #[test]
         fn test_prunes_cancelled_orders_correctly() {
             let mut market = SpotMarket::test_new(100, 2);
-            let precision = MarketPrecision {
+            let mp = MarketPrecision {
                 base_lot_size: 100,
                 quote_lot_size: 100,
                 tick: market.tick,
                 tick_decimals: market.tick_decimals,
             };
 
-            let order_1 = new_limit(1, 8, OrderDirection::Buy, 1);
-            let order_2 = new_limit(3, 8, OrderDirection::Buy, 2);
-            let order_3 = new_limit(1, 6, OrderDirection::Buy, 3);
-            let order_4 = new_limit(1, 4, OrderDirection::Buy, 4);
-            let order_5 = new_limit(1, 10, OrderDirection::Buy, 5);
-            let order_6 = new_limit(1, 9, OrderDirection::Buy, 6);
+            let account = PublicKeyHash::default();
 
-            market.add_limit_helper(order_1.clone(), &precision);
-            market.add_limit_helper(order_2.clone(), &precision);
-            market.add_limit_helper(order_3.clone(), &precision);
-            market.add_limit_helper(order_4.clone(), &precision);
-            market.add_limit_helper(order_5.clone(), &precision);
-            market.add_limit_helper(order_6.clone(), &precision);
+            let order_1 = new_limit(1, 8, OrderDirection::Buy, 1, account);
+            let order_2 = new_limit(3, 8, OrderDirection::Buy, 2, account);
+            let order_3 = new_limit(1, 6, OrderDirection::Buy, 3, account);
+            let order_4 = new_limit(1, 4, OrderDirection::Buy, 4, account);
+            let order_5 = new_limit(1, 10, OrderDirection::Buy, 5, account);
+            let order_6 = new_limit(1, 9, OrderDirection::Buy, 6, account);
+
+            market.add_limit_helper(order_1.clone(), &mp);
+            market.add_limit_helper(order_2.clone(), &mp);
+            market.add_limit_helper(order_3.clone(), &mp);
+            market.add_limit_helper(order_4.clone(), &mp);
+            market.add_limit_helper(order_5.clone(), &mp);
+            market.add_limit_helper(order_6.clone(), &mp);
 
             assert_eq!(market.bids_levels.len(), 2);
             assert_eq!(market.asks_levels.len(), 0);
@@ -1579,11 +1849,144 @@ mod tests {
             assert_eq!(market.bids_levels[0].volume, expected_level_volume);
 
             // should prune here
-            market.cancel_order(&new_limit(1, 9, OrderDirection::Buy, 6));
+            market.cancel_order(&new_limit(1, 9, OrderDirection::Buy, 6, account));
             expected_level_volume -= order_6.base_lots;
             assert_eq!(market.bids_levels[0].cancelled, 0);
             assert_eq!(market.bids_levels[0].orders.len(), 2);
             assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+        }
+
+        #[test]
+        fn test_self_fills_buys_correctly() {
+            let mut market = SpotMarket::test_new(100, 2);
+            let mp = MarketPrecision {
+                base_lot_size: 100,
+                quote_lot_size: 100,
+                tick: market.tick,
+                tick_decimals: market.tick_decimals,
+            };
+
+            let account = PublicKeyHash::default();
+
+            let order_1 = new_limit(1, 8, OrderDirection::Buy, 1, account);
+            let order_2 = new_limit(3, 8, OrderDirection::Buy, 2, account);
+            let order_3 = new_limit(1, 6, OrderDirection::Buy, 3, account);
+            let order_4 = new_limit(1, 4, OrderDirection::Buy, 4, account);
+            let order_5 = new_limit(1, 10, OrderDirection::Buy, 5, account);
+            let order_6 = new_limit(1, 9, OrderDirection::Buy, 6, account);
+
+            market.add_limit_helper(order_1.clone(), &mp);
+            market.add_limit_helper(order_2.clone(), &mp);
+            market.add_limit_helper(order_3.clone(), &mp);
+            market.add_limit_helper(order_4.clone(), &mp);
+            market.add_limit_helper(order_5.clone(), &mp);
+            market.add_limit_helper(order_6.clone(), &mp);
+
+            let order = make_market_sell_order(3, 40, account);
+            let market_result = market.handle_market_order(order, &mp);
+
+            match market_result {
+                crate::state::order::MarketOrderMatchingResults::Sell {
+                    order_id: _,
+                    base_filled_lots,
+                    quote_lots_in,
+                    self_fill,
+                    filled_orders,
+                    residual_order,
+                } => {
+                    assert_eq!(self_fill, 40);
+                    assert_eq!(base_filled_lots, 0);
+                    assert_eq!(quote_lots_in, 0);
+                    assert_eq!(filled_orders.len(), 5);
+                    assert_eq!(filled_orders[0].self_filled, 8);
+                    assert_eq!(filled_orders[1].self_filled, 8);
+                    assert_eq!(filled_orders[2].self_filled, 6);
+                    assert_eq!(filled_orders[3].self_filled, 4);
+                    assert_eq!(filled_orders[4].self_filled, 10);
+
+                    assert_eq!(filled_orders[0].filled_base_lots, 0);
+                    assert_eq!(filled_orders[1].filled_base_lots, 0);
+                    assert_eq!(filled_orders[2].filled_base_lots, 0);
+                    assert_eq!(filled_orders[3].filled_base_lots, 0);
+                    assert_eq!(filled_orders[4].filled_base_lots, 0);
+
+                    assert_eq!(market.bids_levels[0].orders[0].self_filled, 4);
+
+                    let residual = residual_order.unwrap();
+                    assert_eq!(residual.self_fill, 4);
+                    assert_eq!(residual.filled_base_lots, 0);
+                }
+                crate::state::order::MarketOrderMatchingResults::Buy { .. } => {
+                    panic!("Expected Sell")
+                }
+            }
+        }
+
+        #[test]
+        fn test_self_fills_sell_correctly() {
+            let mut market = SpotMarket::test_new(100, 2);
+            let mp = MarketPrecision {
+                base_lot_size: 100,
+                quote_lot_size: 100,
+                tick: market.tick,
+                tick_decimals: market.tick_decimals,
+            };
+
+            let account = PublicKeyHash::default();
+
+            let order_1 = new_limit(10, 8, OrderDirection::Sell, 1, account);
+            let order_2 = new_limit(30, 9, OrderDirection::Sell, 2, account);
+            let order_3 = new_limit(10, 6, OrderDirection::Sell, 3, account);
+            let order_4 = new_limit(10, 4, OrderDirection::Sell, 4, account);
+            let order_5 = new_limit(10, 10, OrderDirection::Sell, 5, account);
+            let order_6 = new_limit(10, 9, OrderDirection::Sell, 6, account);
+
+            market.add_limit_helper(order_1.clone(), &mp);
+            market.add_limit_helper(order_2.clone(), &mp);
+            market.add_limit_helper(order_3.clone(), &mp);
+            market.add_limit_helper(order_4.clone(), &mp);
+            market.add_limit_helper(order_5.clone(), &mp);
+            market.add_limit_helper(order_6.clone(), &mp);
+
+            let order = make_market_buy_order(3, 400, account);
+            let market_result = market.handle_market_order(order, &mp);
+
+            match market_result {
+                crate::state::order::MarketOrderMatchingResults::Buy {
+                    order_id: _,
+
+                    self_fill,
+                    filled_orders,
+                    residual_order,
+                    quote_filled_lots,
+                    base_lots_in,
+                } => {
+                    assert_eq!(self_fill, 400);
+                    assert_eq!(base_lots_in, 0);
+                    assert_eq!(quote_filled_lots, 0);
+                    assert_eq!(filled_orders.len(), 5);
+                    assert_eq!(filled_orders[0].self_filled, 8); // 80
+                    assert_eq!(filled_orders[1].self_filled, 6); // 60 
+                    assert_eq!(filled_orders[2].self_filled, 4); // 40
+                    assert_eq!(filled_orders[3].self_filled, 10); // 100
+                    assert_eq!(filled_orders[4].self_filled, 9); // 90
+
+                    assert_eq!(filled_orders[0].filled_base_lots, 0);
+                    assert_eq!(filled_orders[1].filled_base_lots, 0);
+                    assert_eq!(filled_orders[2].filled_base_lots, 0);
+                    assert_eq!(filled_orders[3].filled_base_lots, 0);
+                    assert_eq!(filled_orders[4].filled_base_lots, 0);
+
+                    assert_eq!(market.asks_levels[0].orders[0].self_filled, 1);
+
+                    let residual = residual_order.unwrap();
+                    assert_eq!(residual.self_fill, 1);
+                    assert_eq!(residual.filled_base_lots, 0);
+                }
+                crate::state::order::MarketOrderMatchingResults::Sell { .. } => {
+                    panic!("Expected Buy")
+                }
+            }
         }
     }
 }

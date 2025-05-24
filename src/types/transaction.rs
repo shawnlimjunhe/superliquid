@@ -145,6 +145,14 @@ impl SignedTransaction {
             UnsignedTransaction::CancelOrder(transaction) => transaction.nonce,
         }
     }
+
+    pub fn get_status(&self) -> TransactionStatus {
+        match &self.tx {
+            UnsignedTransaction::Transfer(transaction) => transaction.status.clone(),
+            UnsignedTransaction::Order(transaction) => transaction.status.clone(),
+            UnsignedTransaction::CancelOrder(transaction) => transaction.status.clone(),
+        }
+    }
 }
 
 impl Deref for SignedTransaction {

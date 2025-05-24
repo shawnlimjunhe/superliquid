@@ -579,6 +579,7 @@ impl SpotClearingHouse {
                         quote_lots_in,
                         filled_orders,
                         residual_order,
+                        self_fill,
                     } => {
                         // Handle user balance change
                         let base_token_balance =
@@ -600,8 +601,13 @@ impl SpotClearingHouse {
                         quote_token_balance.total_balance += quote_amount_in;
                         quote_token_balance.available_balance += quote_amount_in;
 
-                        let average_execution_price = quote_lots_in / base_filled_lots;
-
+                        let average_execution_price = {
+                            if base_filled_lots > 0 {
+                                quote_lots_in / base_filled_lots
+                            } else {
+                                0
+                            }
+                        };
                         for filled_order in filled_orders.iter() {
                             if filled_order.common.status == OrderStatus::Cancelled {
                                 continue;
@@ -677,6 +683,7 @@ impl SpotClearingHouse {
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
                                 filled_lots: base_filled_lots,
+                                self_fill,
                                 average_execution_price: average_execution_price,
                             }),
                         });
@@ -687,6 +694,7 @@ impl SpotClearingHouse {
                         filled_orders,
                         base_lots_in,
                         residual_order,
+                        self_fill,
                     } => {
                         let quote_token_balance = Self::get_account_token_balance_mut(
                             account_balance,
@@ -709,7 +717,13 @@ impl SpotClearingHouse {
                         base_token_balance.total_balance += base_amount;
                         base_token_balance.available_balance += base_amount;
 
-                        let average_execution_price = quote_filled_lots / base_lots_in;
+                        let average_execution_price = {
+                            if base_lots_in > 0 {
+                                quote_filled_lots / base_lots_in
+                            } else {
+                                0
+                            }
+                        };
 
                         for filled_order in filled_orders.iter() {
                             if filled_order.common.status == OrderStatus::Cancelled {
@@ -787,7 +801,8 @@ impl SpotClearingHouse {
                             user_order_change: Some(OrderChange::MarketOrderChange {
                                 order_id,
                                 filled_lots: quote_filled_lots,
-                                average_execution_price: average_execution_price,
+                                self_fill,
+                                average_execution_price,
                             }),
                         });
                     }
@@ -820,6 +835,7 @@ mod tests {
             price_multiple: price_tick,
             base_lots: lot_size,
             filled_base_lots: 0,
+            self_filled: 0,
             common: CommonOrderFields {
                 id,
                 market_id: 0,
@@ -835,6 +851,7 @@ mod tests {
             quote_size,
             filled_size: 0,
             average_execution_price: 0,
+            self_filled: 0,
             common: CommonOrderFields {
                 id,
                 market_id: 0,
@@ -850,6 +867,7 @@ mod tests {
             base_size,
             filled_size: 0,
             average_execution_price: 0,
+            self_filled: 0,
             common: CommonOrderFields {
                 id,
                 market_id: 0,
