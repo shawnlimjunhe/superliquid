@@ -342,6 +342,7 @@ impl SpotClearingHouse {
                             residual_order,
                             user_order,
                             filled_orders,
+                            last_executed_price: _,
                         } = limit_fill_results;
 
                         let UserExecutionResult {
@@ -580,6 +581,7 @@ impl SpotClearingHouse {
                         filled_orders,
                         residual_order,
                         self_fill,
+                        last_executed_price: _,
                     } => {
                         // Handle user balance change
                         let base_token_balance =
@@ -695,6 +697,7 @@ impl SpotClearingHouse {
                         base_lots_in,
                         residual_order,
                         self_fill,
+                        last_executed_price: _,
                     } => {
                         let quote_token_balance = Self::get_account_token_balance_mut(
                             account_balance,

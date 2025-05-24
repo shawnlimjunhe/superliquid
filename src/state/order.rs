@@ -222,6 +222,7 @@ pub struct LimitFillResult {
     pub user_order: UserExecutionResult,
     pub filled_orders: Vec<LimitOrder>,
     pub residual_order: Option<ResidualOrder>,
+    pub last_executed_price: Option<u64>,
 }
 
 pub enum MarketOrderMatchingResults {
@@ -232,6 +233,7 @@ pub enum MarketOrderMatchingResults {
         self_fill: u64,
         filled_orders: Vec<LimitOrder>,
         residual_order: Option<ResidualOrder>,
+        last_executed_price: Option<u64>,
     },
     Buy {
         order_id: OrderId,
@@ -240,8 +242,25 @@ pub enum MarketOrderMatchingResults {
         self_fill: u64,
         filled_orders: Vec<LimitOrder>,
         residual_order: Option<ResidualOrder>,
+        last_executed_price: Option<u64>,
     },
 }
+
+impl MarketOrderMatchingResults {
+    pub fn get_last_executed_price(&self) -> Option<u64> {
+        match self {
+            MarketOrderMatchingResults::Sell {
+                last_executed_price,
+                ..
+            } => *last_executed_price,
+            MarketOrderMatchingResults::Buy {
+                last_executed_price,
+                ..
+            } => *last_executed_price,
+        }
+    }
+}
+
 pub enum OrderChange {
     LimitOrderChange {
         order_id: OrderId,

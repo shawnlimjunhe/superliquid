@@ -23,6 +23,7 @@ pub struct SpotMarket {
     pub quote_asset: AssetId,
     pub tick: u32,
     pub tick_decimals: u8,
+    pub last_executed_price: Option<u64>,
     // pub lot_size: (),
 
     // levels are in reverse order, best prices are at the end
@@ -56,6 +57,7 @@ impl SpotMarket {
             asks_levels: vec![],
             tick,
             tick_decimals,
+            last_executed_price: None,
         }
     }
 
@@ -201,6 +203,7 @@ impl SpotMarket {
         let mut residual_order: Option<ResidualOrder> = None;
         let mut lots_in: u64 = 0;
         let mut lots_out: u64 = 0;
+        let mut last_executed_price: Option<u64> = None;
 
         let order_price = order.price_multiple;
         let mut remaining_base_amount = order.base_lots;
@@ -229,6 +232,7 @@ impl SpotMarket {
 
                         let curr_filled_base_amount = remaining_base_amount.min(order_remaining);
                         remaining_base_amount -= curr_filled_base_amount;
+                        last_executed_price = Some(level_price);
 
                         if is_buy {
                             lots_in += curr_filled_base_amount;
@@ -291,6 +295,7 @@ impl SpotMarket {
                 asset_out,
                 filled_size: order.filled_base_lots,
             },
+            last_executed_price,
         };
     }
 
@@ -307,6 +312,7 @@ impl SpotMarket {
         let mut base_lots_in: u64 = 0;
         let mut self_fill_quotes: u64 = 0;
         let mut remaining_quote_lots = buy_order.quote_size;
+        let mut last_executed_price: Option<u64> = None;
 
         while !levels.is_empty() && remaining_quote_lots > 0 {
             let level = levels.last_mut();
@@ -370,7 +376,9 @@ impl SpotMarket {
                     }
                     continue;
                 }
+
                 let filled_base_lots = remaining_base_lots.min(order_base_remaining);
+                last_executed_price = Some(level.price);
                 remaining_base_lots -= filled_base_lots;
                 level_filled += filled_base_lots;
 
@@ -425,6 +433,7 @@ impl SpotMarket {
             self_fill: self_fill_quotes,
             residual_order,
             order_id: buy_order.common.id,
+            last_executed_price,
         };
     }
 
@@ -441,6 +450,7 @@ impl SpotMarket {
         let mut maker_partial_fill: Option<ResidualOrder> = None;
         let mut quote_lots_in: u64 = 0;
         let mut self_fill: u64 = 0;
+        let mut last_executed_price: Option<u64> = None;
 
         let mut remaining_base_lots = sell_order.base_size;
 
@@ -491,6 +501,8 @@ impl SpotMarket {
                 }
 
                 let filled_base_lots = remaining_base_lots.min(order_remaining);
+
+                last_executed_price = Some(level.price);
                 remaining_base_lots -= filled_base_lots;
                 // Don't modify the order's filled amount here as we are using it
                 // to determine the filled amount when settling the order
@@ -538,6 +550,7 @@ impl SpotMarket {
             quote_lots_in,
             self_fill,
             order_id: sell_order.common.id,
+            last_executed_price,
         };
     }
 
@@ -546,14 +559,16 @@ impl SpotMarket {
         order: MarketOrder,
         precision: &MarketPrecision,
     ) -> MarketOrderMatchingResults {
-        match order {
+        let result = match order {
             MarketOrder::Sell(sell_order) => {
                 Self::execute_market_sell_order(&mut self.bids_levels, sell_order, precision)
             }
             MarketOrder::Buy(buy_order) => {
                 Self::execute_market_buy_order(&mut self.asks_levels, buy_order, precision)
             }
-        }
+        };
+        self.set_last_executed_price(result.get_last_executed_price());
+        result
     }
 
     pub fn add_limit_order(
@@ -584,6 +599,7 @@ impl SpotMarket {
                         precision,
                         |a, b| b.partial_cmp(&a).unwrap(),
                     );
+                    self.set_last_executed_price(result.last_executed_price);
 
                     // Determine whether we need to add the order
                     if order.filled_base_lots < order.base_lots {
@@ -614,6 +630,9 @@ impl SpotMarket {
                         precision,
                         |a, b| a.partial_cmp(&b).unwrap(),
                     );
+
+                    self.set_last_executed_price(result.last_executed_price);
+
                     // Determine whether we need to add the order
                     if order.filled_base_lots < order.base_lots {
                         self.add_ask(order);
@@ -639,6 +658,16 @@ impl SpotMarket {
         let best_ask = self.asks_levels.last().map(|level| level.price);
 
         (best_bid, best_ask)
+    }
+
+    pub fn get_last_executed_price(&self) -> Option<u64> {
+        self.last_executed_price
+    }
+
+    pub fn set_last_executed_price(&mut self, last_executed_price: Option<u64>) {
+        if let Some(price) = last_executed_price {
+            self.last_executed_price = Some(price);
+        }
     }
 }
 
@@ -735,6 +764,7 @@ mod tests {
                 quote_asset: 1,
                 tick_decimals,
                 tick,
+                last_executed_price: None,
             }
         }
     }
@@ -1404,10 +1434,11 @@ mod tests {
                         filled_orders,
                         residual_order,
                         self_fill: _,
+                        last_executed_price,
                     } => {
                         assert_eq!(market.get_best_prices(), (Some(2500), None));
                         assert_eq!(order_id, 3);
-
+                        assert_eq!(last_executed_price, None);
                         assert_eq!(quote_filled_lots, 0);
                         assert_eq!(base_lots_in, 0);
                         assert_eq!(filled_orders.len(), 0);
@@ -1455,12 +1486,15 @@ mod tests {
                         filled_orders,
                         residual_order,
                         self_fill: _,
+                        last_executed_price,
                     } => {
                         // Check market state
                         {
                             assert_eq!(market.get_best_prices(), (Some(2400), Some(2550)));
                             assert_eq!(market.bids_levels.len(), 4);
                             assert_eq!(market.asks_levels.len(), 3);
+                            let resting_level = market.asks_levels.last().unwrap();
+                            assert_eq!(last_executed_price, Some(resting_level.price));
                             // Should buy 100 of this level;
                             assert_eq!(market.asks_levels.last().unwrap().volume, 483);
                         }
@@ -1522,6 +1556,7 @@ mod tests {
                         filled_orders,
                         residual_order,
                         self_fill: _,
+                        last_executed_price,
                     } => {
                         // Check market state
                         {
@@ -1529,7 +1564,9 @@ mod tests {
                             assert_eq!(market.bids_levels.len(), 4);
                             assert_eq!(market.asks_levels.len(), 3);
                             // Should buy 100 of this level;
-                            assert_eq!(market.asks_levels.last().unwrap().volume, 502);
+                            let resting_level = market.asks_levels.last().unwrap();
+                            assert_eq!(resting_level.volume, 502);
+                            assert_eq!(last_executed_price, Some(resting_level.price));
                         }
 
                         assert_eq!(order_id, 4);
@@ -1587,9 +1624,11 @@ mod tests {
                         filled_orders,
                         residual_order,
                         self_fill: _,
+                        last_executed_price,
                     } => {
                         assert_eq!(market.get_best_prices(), (None, Some(2_500)));
                         assert_eq!(order_id, 3);
+                        assert_eq!(last_executed_price, None);
 
                         assert_eq!(base_filled_lots, 0);
                         assert_eq!(quote_lots_in, 0);
@@ -1638,6 +1677,7 @@ mod tests {
                         base_filled_lots,
                         quote_lots_in,
                         self_fill: _,
+                        last_executed_price,
                     } => {
                         // Check market state
                         {
@@ -1645,7 +1685,9 @@ mod tests {
                             assert_eq!(market.bids_levels.len(), 2);
                             assert_eq!(market.asks_levels.len(), 4);
                             // Should buy 100 of this level;
-                            assert_eq!(market.bids_levels.last().unwrap().volume, 400);
+                            let resting_bids_level = market.bids_levels.last().unwrap();
+                            assert_eq!(resting_bids_level.volume, 400);
+                            assert_eq!(last_executed_price, Some(resting_bids_level.price));
                         }
 
                         assert_eq!(order_id, 3);
@@ -1710,6 +1752,7 @@ mod tests {
                         base_filled_lots,
                         quote_lots_in,
                         self_fill: _,
+                        last_executed_price,
                     } => {
                         // Check market state
                         {
@@ -1717,7 +1760,9 @@ mod tests {
                             assert_eq!(market.bids_levels.len(), 2);
                             assert_eq!(market.asks_levels.len(), 4);
                             // Should buy 300 of this level;
-                            assert_eq!(market.bids_levels.last().unwrap().volume, 300);
+                            let resting_bids_level = market.bids_levels.last().unwrap();
+                            assert_eq!(resting_bids_level.volume, 300);
+                            assert_eq!(last_executed_price, Some(resting_bids_level.price))
                         }
 
                         assert_eq!(order_id, 3);
@@ -1931,11 +1976,14 @@ mod tests {
                     self_fill,
                     filled_orders,
                     residual_order,
+                    last_executed_price,
                 } => {
                     assert_eq!(self_fill, 40);
                     assert_eq!(base_filled_lots, 0);
                     assert_eq!(quote_lots_in, 0);
                     assert_eq!(filled_orders.len(), 5);
+                    assert_eq!(last_executed_price, None);
+
                     assert_eq!(filled_orders[0].self_filled, 8);
                     assert_eq!(filled_orders[1].self_filled, 8);
                     assert_eq!(filled_orders[2].self_filled, 6);
@@ -1998,11 +2046,14 @@ mod tests {
                     residual_order,
                     quote_filled_lots,
                     base_lots_in,
+                    last_executed_price,
                 } => {
                     assert_eq!(self_fill, 400);
                     assert_eq!(base_lots_in, 0);
                     assert_eq!(quote_filled_lots, 0);
                     assert_eq!(filled_orders.len(), 5);
+                    assert_eq!(last_executed_price, None);
+
                     assert_eq!(filled_orders[0].self_filled, 8); // 80
                     assert_eq!(filled_orders[1].self_filled, 6); // 60 
                     assert_eq!(filled_orders[2].self_filled, 4); // 40
