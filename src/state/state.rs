@@ -705,6 +705,9 @@ mod tests {
                 tick: tick,
                 tick_decimals: tick_decimals,
             };
+            let market_id = 0;
+            const DEFAULT_BASE: u128 = 1_000_000_000;
+            const DEFAULT_QUOTE: u128 = 1_000_000_000_000;
 
             ledger_state
                 .spot_clearinghouse
@@ -726,17 +729,17 @@ mod tests {
             // Drip assets to users
             {
                 let user_base_drip_tx =
-                    create_faucet_txn(&mut faucet_sk, user_pk, base, 1_000_000_000, 0);
+                    create_faucet_txn(&mut faucet_sk, user_pk, base, DEFAULT_BASE, 0);
                 let user_quote_drip_tx =
-                    create_faucet_txn(&mut faucet_sk, user_pk, quote, 1_000_000_000_000, 1);
+                    create_faucet_txn(&mut faucet_sk, user_pk, quote, DEFAULT_QUOTE, 1);
                 let mm_1_base_drip_tx =
-                    create_faucet_txn(&mut faucet_sk, mm_1_pk, base, 1_000_000_000, 2);
+                    create_faucet_txn(&mut faucet_sk, mm_1_pk, base, DEFAULT_BASE, 2);
                 let mm_1_quote_drip_tx =
-                    create_faucet_txn(&mut faucet_sk, mm_1_pk, quote, 1_000_000_000_000, 3);
+                    create_faucet_txn(&mut faucet_sk, mm_1_pk, quote, DEFAULT_QUOTE, 3);
                 let mm_2_base_drip_tx =
-                    create_faucet_txn(&mut faucet_sk, mm_2_pk, base, 1_000_000_000, 4);
+                    create_faucet_txn(&mut faucet_sk, mm_2_pk, base, DEFAULT_BASE, 4);
                 let mm_2_quote_drip_tx =
-                    create_faucet_txn(&mut faucet_sk, mm_2_pk, quote, 1_000_000_000_000, 5);
+                    create_faucet_txn(&mut faucet_sk, mm_2_pk, quote, DEFAULT_QUOTE, 5);
 
                 let mut block_1 = create_block(vec![user_base_drip_tx]);
                 let mut block_2 = create_block(vec![user_quote_drip_tx]);
@@ -755,35 +758,23 @@ mod tests {
 
             // Check user balances
             {
+                let base = base as usize;
+                let quote = quote as usize;
+
                 let user_balance = ledger_state.get_account_info_with_balances_or_default(&user_pk);
-                assert_eq!(
-                    user_balance.spot_balances.asset_balances[base as usize].available_balance,
-                    1_000_000_000
-                );
-                assert_eq!(
-                    user_balance.spot_balances.asset_balances[quote as usize].available_balance,
-                    1_000_000_000_000
-                );
+                let user_asset_balances = &user_balance.spot_balances.asset_balances;
+                assert_eq!(user_asset_balances[base].available_balance, DEFAULT_BASE);
+                assert_eq!(user_asset_balances[quote].available_balance, DEFAULT_QUOTE);
 
                 let mm_1_balance = ledger_state.get_account_info_with_balances_or_default(&mm_1_pk);
-                assert_eq!(
-                    mm_1_balance.spot_balances.asset_balances[base as usize].available_balance,
-                    1_000_000_000
-                );
-                assert_eq!(
-                    mm_1_balance.spot_balances.asset_balances[quote as usize].available_balance,
-                    1_000_000_000_000
-                );
+                let mm_1_asset_balances = &mm_1_balance.spot_balances.asset_balances;
+                assert_eq!(mm_1_asset_balances[base].available_balance, DEFAULT_BASE);
+                assert_eq!(mm_1_asset_balances[quote].available_balance, DEFAULT_QUOTE);
 
                 let mm_2_balance = ledger_state.get_account_info_with_balances_or_default(&mm_2_pk);
-                assert_eq!(
-                    mm_2_balance.spot_balances.asset_balances[base as usize].available_balance,
-                    1_000_000_000
-                );
-                assert_eq!(
-                    mm_2_balance.spot_balances.asset_balances[quote as usize].available_balance,
-                    1_000_000_000_000
-                );
+                let mm_2_asset_balances = &mm_2_balance.spot_balances.asset_balances;
+                assert_eq!(mm_2_asset_balances[base].available_balance, DEFAULT_BASE);
+                assert_eq!(mm_2_asset_balances[quote].available_balance, DEFAULT_QUOTE);
             }
 
             // setup market (C = cancelled)
@@ -802,7 +793,7 @@ mod tests {
                 // id 0
                 let mm_1_buy_1 = create_order_txn(
                     &mut mm_1_sk,
-                    0,
+                    market_id,
                     OrderDirection::Buy,
                     OrderType::Limit(2_200, 700),
                     mm_1_nonce,
@@ -812,7 +803,7 @@ mod tests {
                 // id 1
                 let mm_2_buy_1 = create_order_txn(
                     &mut mm_2_sk,
-                    0,
+                    market_id,
                     OrderDirection::Buy,
                     OrderType::Limit(2_300, 700),
                     mm_2_nonce,
@@ -822,7 +813,7 @@ mod tests {
                 // id 2
                 let mm_1_buy_2 = create_order_txn(
                     &mut mm_1_sk,
-                    0,
+                    market_id,
                     OrderDirection::Buy,
                     OrderType::Limit(2_450, 1_000),
                     mm_1_nonce,
@@ -832,7 +823,7 @@ mod tests {
                 // id 3
                 let mm_2_buy_2 = create_order_txn(
                     &mut mm_2_sk,
-                    0,
+                    market_id,
                     OrderDirection::Buy,
                     OrderType::Limit(2_300, 400),
                     mm_2_nonce,
@@ -842,7 +833,7 @@ mod tests {
                 // id 4
                 let mm_1_sell_1 = create_order_txn(
                     &mut mm_1_sk,
-                    0,
+                    market_id,
                     OrderDirection::Sell,
                     OrderType::Limit(2_500, 600),
                     mm_1_nonce,
@@ -852,7 +843,7 @@ mod tests {
                 // id 5
                 let mm_2_buy_3 = create_order_txn(
                     &mut mm_2_sk,
-                    0,
+                    market_id,
                     OrderDirection::Buy,
                     OrderType::Limit(2_300, 700),
                     mm_2_nonce,
@@ -862,7 +853,7 @@ mod tests {
                 // id 6
                 let mm_2_sell_1 = create_order_txn(
                     &mut mm_2_sk,
-                    0,
+                    market_id,
                     OrderDirection::Sell,
                     OrderType::Limit(2_500, 1_000),
                     mm_2_nonce,
@@ -872,7 +863,7 @@ mod tests {
                 // id 7
                 let mm_1_sell_2 = create_order_txn(
                     &mut mm_1_sk,
-                    0,
+                    market_id,
                     OrderDirection::Sell,
                     OrderType::Limit(2_700, 700),
                     mm_1_nonce,
@@ -882,7 +873,7 @@ mod tests {
                 // id 8
                 let mm_1_sell_3 = create_order_txn(
                     &mut mm_1_sk,
-                    0,
+                    market_id,
                     OrderDirection::Sell,
                     OrderType::Limit(2_800, 300),
                     mm_1_nonce,
@@ -892,7 +883,7 @@ mod tests {
                 // id 9
                 let mm_2_sell_2 = create_order_txn(
                     &mut mm_2_sk,
-                    0,
+                    market_id,
                     OrderDirection::Sell,
                     OrderType::Limit(2_600, 1_200),
                     mm_2_nonce,
@@ -902,7 +893,7 @@ mod tests {
                 // id 10
                 let mm_1_sell_4 = create_order_txn(
                     &mut mm_1_sk,
-                    0,
+                    market_id,
                     OrderDirection::Sell,
                     OrderType::Limit(2_500, 300),
                     mm_1_nonce,
@@ -932,28 +923,31 @@ mod tests {
                 // Check account info state
                 {
                     let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                    assert_eq!(mm_1_account_info.open_orders.len(), 5);
+                    let open_orders = &mm_1_account_info.open_orders;
+                    let completed_orders = &mm_1_account_info.completed_orders;
 
-                    let is_cancelled_still_in_open = mm_1_account_info
-                        .open_orders
-                        .iter()
-                        .find(|order| order.common.id == 10);
+                    assert_eq!(open_orders.len(), 5);
+
+                    let is_cancelled_still_in_open = open_orders.iter().find(|o| o.common.id == 10);
                     assert!(is_cancelled_still_in_open.is_none());
 
-                    assert_eq!(mm_1_account_info.completed_orders.len(), 1);
-                    assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
+                    assert_eq!(completed_orders.len(), 1);
+                    assert_eq!(completed_orders[0].get_id(), 10);
+                }
 
+                {
                     let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                    assert_eq!(mm_2_account_info.open_orders.len(), 4);
+                    let open_orders = &mm_2_account_info.open_orders;
+                    let completed_orders = &mm_2_account_info.completed_orders;
 
-                    let is_cancelled_still_in_open = mm_2_account_info
-                        .open_orders
-                        .iter()
-                        .find(|order| order.common.id == 5);
+                    assert_eq!(open_orders.len(), 4);
+
+                    let is_cancelled_still_in_open =
+                        open_orders.iter().find(|order| order.common.id == 5);
                     assert!(is_cancelled_still_in_open.is_none());
 
-                    assert_eq!(mm_2_account_info.completed_orders.len(), 1);
-                    assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
+                    assert_eq!(completed_orders.len(), 1);
+                    assert_eq!(completed_orders[0].get_id(), 5);
                 }
             }
 
@@ -1031,11 +1025,14 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 2);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 2);
-                assert_eq!(user_account_info.completed_orders[0].get_id(), 12);
-                assert_eq!(user_account_info.completed_orders[1].get_id(), 13);
+                assert_eq!(open_orders.len(), 2);
+
+                assert_eq!(completed_orders.len(), 2);
+                assert_eq!(completed_orders[0].get_id(), 12);
+                assert_eq!(completed_orders[1].get_id(), 13);
             }
         }
 
@@ -1066,22 +1063,23 @@ mod tests {
                 OrderType::Limit(2_400, 500),
                 user_nonce,
             );
-            user_nonce += 1;
 
             let mut block_1 = create_block(vec![user_buy_1]);
             let mut block_2 = create_block(vec![user_sell_1]);
 
             ledger_state.apply_block(&mut block_1);
             ledger_state.apply_block(&mut block_2);
-            // Check account info state
+            // Check user account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 0);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 2);
-                assert_eq!(user_account_info.completed_orders[0].get_id(), 11);
-                assert_eq!(user_account_info.completed_orders[1].get_id(), 12);
-                assert_eq!(user_account_info.open_orders.len(), 0);
+                assert_eq!(open_orders.len(), 0);
+
+                assert_eq!(completed_orders.len(), 2);
+                assert_eq!(completed_orders[0].get_id(), 11);
+                assert_eq!(completed_orders[1].get_id(), 12);
             }
 
             // Check mm state
@@ -1089,10 +1087,14 @@ mod tests {
                 // mm_1
                 let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                 let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                assert_eq!(mm_1_account_info.open_orders.len(), 5);
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
 
-                assert_eq!(mm_1_account_info.completed_orders.len(), 1);
-                assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
+                assert_eq!(open_orders.len(), 5);
+
+                assert_eq!(completed_orders.len(), 1);
+                assert_eq!(completed_orders[0].get_id(), 10);
+
                 assert_eq!(
                     mm_1_account_info
                         .get_open_order(2)
@@ -1107,17 +1109,22 @@ mod tests {
                         .filled_base_lots,
                     400
                 );
+
+                // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
                 let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                assert_eq!(mm_2_account_info.open_orders.len(), 4);
-                assert_eq!(mm_2_account_info.completed_orders.len(), 1);
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
+
+                assert_eq!(open_orders.len(), 4);
+                assert_eq!(completed_orders.len(), 1);
             }
         }
 
         #[test]
         pub fn test_user_limit_buy_order_with_partial_fill() {
             let mut ledger_state = test_setup();
-            let mut user_nonce = 0;
+            let user_nonce = 0;
 
             let mut user_sk = get_alice_sk();
             let user_pk = user_sk.verifying_key().to_bytes();
@@ -1130,7 +1137,6 @@ mod tests {
                 OrderType::Limit(2_550, 1700),
                 user_nonce,
             );
-            user_nonce += 1;
 
             let mut block_1 = create_block(vec![user_buy_1]);
 
@@ -1138,11 +1144,12 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 1);
-                assert_eq!(user_account_info.open_orders[0].filled_base_lots, 1600);
-
-                assert_eq!(user_account_info.completed_orders.len(), 0);
-                assert_eq!(user_account_info.open_orders[0].common.id, 11);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
+                assert_eq!(open_orders.len(), 1);
+                assert_eq!(open_orders[0].filled_base_lots, 1600);
+                assert_eq!(completed_orders.len(), 0);
+                assert_eq!(open_orders[0].common.id, 11);
             }
 
             // Check mm state
@@ -1150,13 +1157,16 @@ mod tests {
                 // mm_1
                 let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                 let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                assert_eq!(mm_1_account_info.open_orders.len(), 4);
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
 
-                assert_eq!(mm_1_account_info.completed_orders.len(), 2);
-                assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
-                assert_eq!(mm_1_account_info.completed_orders[1].get_id(), 4);
+                assert_eq!(open_orders.len(), 4);
 
-                let completed_order = &mm_1_account_info.completed_orders[1];
+                assert_eq!(completed_orders.len(), 2);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 4);
+
+                let completed_order = &completed_orders[1];
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
                         assert_eq!(limit_order.filled_base_lots, 600);
@@ -1169,13 +1179,16 @@ mod tests {
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
                 let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                assert_eq!(mm_2_account_info.open_orders.len(), 3);
-                assert_eq!(mm_2_account_info.completed_orders.len(), 2);
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
 
-                assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
-                assert_eq!(mm_2_account_info.completed_orders[1].get_id(), 6);
+                assert_eq!(open_orders.len(), 3);
+                assert_eq!(completed_orders.len(), 2);
 
-                let completed_order = &mm_2_account_info.completed_orders[1];
+                assert_eq!(completed_orders[0].get_id(), 5);
+                assert_eq!(completed_orders[1].get_id(), 6);
+
+                let completed_order = &completed_orders[1];
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
                         assert_eq!(limit_order.filled_base_lots, 1000);
@@ -1191,7 +1204,7 @@ mod tests {
         pub fn test_user_limit_sell_order_with_partial_fill() {
             let mut ledger_state = test_setup();
 
-            let mut user_nonce = 0;
+            let user_nonce = 0;
 
             let mut user_sk = get_alice_sk();
             let user_pk = user_sk.verifying_key().to_bytes();
@@ -1204,7 +1217,6 @@ mod tests {
                 OrderType::Limit(2_400, 1700),
                 user_nonce,
             );
-            user_nonce += 1;
 
             let mut block_1 = create_block(vec![user_buy_1]);
 
@@ -1212,11 +1224,14 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 1);
-                assert_eq!(user_account_info.open_orders[0].filled_base_lots, 1000);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 0);
-                assert_eq!(user_account_info.open_orders[0].common.id, 11);
+                assert_eq!(open_orders.len(), 1);
+                assert_eq!(open_orders[0].filled_base_lots, 1000);
+
+                assert_eq!(completed_orders.len(), 0);
+                assert_eq!(open_orders[0].common.id, 11);
             }
 
             // Check mm state
@@ -1224,13 +1239,16 @@ mod tests {
                 // mm_1
                 let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                 let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                assert_eq!(mm_1_account_info.open_orders.len(), 4);
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
 
-                assert_eq!(mm_1_account_info.completed_orders.len(), 2);
-                assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
-                assert_eq!(mm_1_account_info.completed_orders[1].get_id(), 2);
+                assert_eq!(open_orders.len(), 4);
 
-                let completed_order = &mm_1_account_info.completed_orders[1];
+                assert_eq!(completed_orders.len(), 2);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 2);
+
+                let completed_order = &completed_orders[1];
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
                         assert_eq!(limit_order.filled_base_lots, 1_000);
@@ -1243,17 +1261,19 @@ mod tests {
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
                 let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                assert_eq!(mm_2_account_info.open_orders.len(), 4);
-                assert_eq!(mm_2_account_info.completed_orders.len(), 1);
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
 
-                assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
+                assert_eq!(open_orders.len(), 4);
+                assert_eq!(completed_orders.len(), 1);
+                assert_eq!(completed_orders[0].get_id(), 5);
             }
         }
 
         #[test]
         pub fn test_user_limit_buy_with_self_fill_and_partial_fill() {
             let mut ledger_state = test_setup();
-            let mut user_nonce = 0;
+            let user_nonce = 0;
 
             let mut user_sk = get_alice_sk();
             let user_pk = user_sk.verifying_key().to_bytes();
@@ -1290,7 +1310,6 @@ mod tests {
                 OrderType::Limit(2_550, 1700),
                 user_nonce,
             );
-            user_nonce += 1;
 
             let mut block_1 = create_block(vec![user_buy_1]);
 
@@ -1298,11 +1317,14 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 1);
-                assert_eq!(user_account_info.open_orders[0].filled_base_lots, 1500);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 0);
-                assert_eq!(user_account_info.open_orders[0].common.id, 12);
+                assert_eq!(open_orders.len(), 1);
+                assert_eq!(open_orders[0].filled_base_lots, 1500);
+
+                assert_eq!(completed_orders.len(), 0);
+                assert_eq!(open_orders[0].common.id, 12);
             }
 
             // Check mm state
@@ -1310,14 +1332,17 @@ mod tests {
                 // mm_1
                 let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                 let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                assert_eq!(mm_1_account_info.open_orders.len(), 4);
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
 
-                assert_eq!(mm_1_account_info.completed_orders.len(), 3);
-                assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
-                assert_eq!(mm_1_account_info.completed_orders[1].get_id(), 11);
-                assert_eq!(mm_1_account_info.completed_orders[2].get_id(), 4);
+                assert_eq!(open_orders.len(), 4);
 
-                let completed_order = &mm_1_account_info.completed_orders[2];
+                assert_eq!(completed_orders.len(), 3);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 11);
+                assert_eq!(completed_orders[2].get_id(), 4);
+
+                let completed_order = &completed_orders[2];
 
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
@@ -1332,13 +1357,16 @@ mod tests {
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
                 let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                assert_eq!(mm_2_account_info.open_orders.len(), 3);
-                assert_eq!(mm_2_account_info.completed_orders.len(), 2);
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
 
-                assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
-                assert_eq!(mm_2_account_info.completed_orders[1].get_id(), 6);
+                assert_eq!(open_orders.len(), 3);
+                assert_eq!(completed_orders.len(), 2);
 
-                let completed_order = &mm_2_account_info.completed_orders[1];
+                assert_eq!(completed_orders[0].get_id(), 5);
+                assert_eq!(completed_orders[1].get_id(), 6);
+
+                let completed_order = &completed_orders[1];
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
                         assert_eq!(limit_order.filled_base_lots, 1000);
@@ -1387,10 +1415,12 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 0);
-                assert_eq!(user_account_info.open_orders.len(), 1);
-                assert_eq!(user_account_info.open_orders[0].common.id, 11);
+                assert_eq!(completed_orders.len(), 0);
+                assert_eq!(open_orders.len(), 1);
+                assert_eq!(open_orders[0].common.id, 11);
             }
 
             assert_eq!(
@@ -1436,11 +1466,13 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 0);
-                assert_eq!(user_account_info.open_orders.len(), 1);
-                assert_eq!(user_account_info.open_orders[0].common.id, 11);
-                assert_eq!(user_account_info.open_orders[0].filled_base_lots, 1000)
+                assert_eq!(completed_orders.len(), 0);
+                assert_eq!(open_orders.len(), 1);
+                assert_eq!(open_orders[0].common.id, 11);
+                assert_eq!(open_orders[0].filled_base_lots, 1000)
             }
 
             assert_eq!(
@@ -1452,7 +1484,7 @@ mod tests {
         #[test]
         pub fn test_market_buy_with_self_fill() {
             let mut ledger_state = test_setup();
-            let mut user_nonce = 0;
+            let user_nonce = 0;
 
             let mut user_sk = get_alice_sk();
             let user_pk = user_sk.verifying_key().to_bytes();
@@ -1490,7 +1522,6 @@ mod tests {
                 OrderType::Market(1000 * 2500),
                 user_nonce,
             );
-            user_nonce += 1;
 
             let mut block_1 = create_block(vec![user_buy_1]);
 
@@ -1498,10 +1529,13 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 0);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 1);
-                let completed_order = user_account_info.completed_orders[0].clone();
+                assert_eq!(open_orders.len(), 0);
+
+                assert_eq!(completed_orders.len(), 1);
+                let completed_order = completed_orders[0].clone();
                 match completed_order {
                     crate::state::order::Order::Limit(_) => {
                         panic!("Expected market order")
@@ -1523,14 +1557,17 @@ mod tests {
                 // mm_1
                 let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                 let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                assert_eq!(mm_1_account_info.open_orders.len(), 4);
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
 
-                assert_eq!(mm_1_account_info.completed_orders.len(), 3);
-                assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
-                assert_eq!(mm_1_account_info.completed_orders[1].get_id(), 11);
-                assert_eq!(mm_1_account_info.completed_orders[2].get_id(), 4);
+                assert_eq!(open_orders.len(), 4);
 
-                let completed_order = &mm_1_account_info.completed_orders[2];
+                assert_eq!(completed_orders.len(), 3);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 11);
+                assert_eq!(completed_orders[2].get_id(), 4);
+
+                let completed_order = &completed_orders[2];
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
                         assert_eq!(limit_order.filled_base_lots, 500);
@@ -1544,10 +1581,13 @@ mod tests {
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
                 let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                assert_eq!(mm_2_account_info.open_orders.len(), 4);
-                assert_eq!(mm_2_account_info.completed_orders.len(), 1);
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
 
-                assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
+                assert_eq!(open_orders.len(), 4);
+                assert_eq!(completed_orders.len(), 1);
+
+                assert_eq!(completed_orders[0].get_id(), 5);
 
                 let order = mm_2_account_info.get_open_order(6).unwrap();
 
@@ -1596,7 +1636,6 @@ mod tests {
                 OrderType::Market(1000),
                 user_nonce,
             );
-            user_nonce += 1;
 
             let mut block_1 = create_block(vec![user_buy_1]);
 
@@ -1604,10 +1643,13 @@ mod tests {
             // Check account info state
             {
                 let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
-                assert_eq!(user_account_info.open_orders.len(), 0);
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
 
-                assert_eq!(user_account_info.completed_orders.len(), 1);
-                let completed_order = user_account_info.completed_orders[0].clone();
+                assert_eq!(open_orders.len(), 0);
+
+                assert_eq!(completed_orders.len(), 1);
+                let completed_order = completed_orders[0].clone();
                 match completed_order {
                     crate::state::order::Order::Limit(_) => {
                         panic!("Expected market order")
@@ -1629,14 +1671,17 @@ mod tests {
                 // mm_1
                 let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                 let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
-                assert_eq!(mm_1_account_info.open_orders.len(), 4);
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
 
-                assert_eq!(mm_1_account_info.completed_orders.len(), 3);
-                assert_eq!(mm_1_account_info.completed_orders[0].get_id(), 10);
-                assert_eq!(mm_1_account_info.completed_orders[1].get_id(), 11);
-                assert_eq!(mm_1_account_info.completed_orders[2].get_id(), 2);
+                assert_eq!(open_orders.len(), 4);
 
-                let completed_order = &mm_1_account_info.completed_orders[2];
+                assert_eq!(completed_orders.len(), 3);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 11);
+                assert_eq!(completed_orders[2].get_id(), 2);
+
+                let completed_order = &completed_orders[2];
                 match completed_order {
                     crate::state::order::Order::Limit(limit_order) => {
                         assert_eq!(limit_order.filled_base_lots, 700);
@@ -1650,10 +1695,12 @@ mod tests {
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
                 let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
-                assert_eq!(mm_2_account_info.open_orders.len(), 4);
-                assert_eq!(mm_2_account_info.completed_orders.len(), 1);
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
 
-                assert_eq!(mm_2_account_info.completed_orders[0].get_id(), 5);
+                assert_eq!(open_orders.len(), 4);
+                assert_eq!(completed_orders.len(), 1);
+                assert_eq!(completed_orders[0].get_id(), 5);
 
                 let order = mm_2_account_info.get_open_order(1).unwrap();
 
