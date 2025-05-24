@@ -594,9 +594,9 @@ mod tests {
             config,
             hotstuff::{block::Block, crypto::QuorumCertificate},
             state::{
-                order::{OrderDirection, OrderType},
+                order::{Order, OrderDirection, OrderId, OrderStatus, OrderType},
                 spot_clearinghouse::{MarketId, MarketPrecision},
-                state::{LedgerState, Nonce},
+                state::{AccountInfo, LedgerState, Nonce},
             },
             test_utils::test_helpers::{get_alice_sk, get_bob_sk, get_carol_sk},
             types::transaction::{
@@ -689,6 +689,86 @@ mod tests {
                 view_number: 0,
                 justify: QuorumCertificate::mock(0),
                 merkle_root: [0; 32],
+            }
+        }
+
+        fn assert_open_order(
+            account_info: &AccountInfo,
+            order_id: OrderId,
+            filled_base_lots: u64,
+            self_filled: u64,
+        ) {
+            let order = account_info.get_open_order(order_id).unwrap();
+            assert_eq!(order.filled_base_lots, filled_base_lots);
+            assert_eq!(order.self_filled, self_filled);
+            assert_eq!(order.common.status, OrderStatus::Open);
+        }
+
+        fn assert_completed_limit_order(
+            order: &Order,
+            order_id: OrderId,
+            filled_base_lots: u64,
+            self_filled: u64,
+        ) {
+            match order {
+                crate::state::order::Order::Limit(limit_order) => {
+                    assert_eq!(limit_order.filled_base_lots, filled_base_lots);
+                    assert_eq!(limit_order.self_filled, self_filled);
+                    assert_eq!(limit_order.common.id, order_id);
+                }
+                crate::state::order::Order::Market(_market_order) => {
+                    panic!("Expected limit order")
+                }
+            }
+        }
+
+        fn assert_completed_market_buy(
+            order: &Order,
+            order_id: OrderId,
+            filled_size: u64,
+            self_filled: u64,
+            quote_size: u64,
+        ) {
+            match order {
+                crate::state::order::Order::Limit(_) => {
+                    panic!("Expected market order")
+                }
+                crate::state::order::Order::Market(market_order) => match market_order {
+                    crate::state::order::MarketOrder::Sell(_) => {
+                        panic!("Expect market buy")
+                    }
+                    crate::state::order::MarketOrder::Buy(market_buy_order) => {
+                        assert_eq!(market_buy_order.filled_size, filled_size);
+                        assert_eq!(market_buy_order.common.id, order_id);
+                        assert_eq!(market_buy_order.self_filled, self_filled);
+                        assert_eq!(market_buy_order.quote_size, quote_size);
+                    }
+                },
+            }
+        }
+
+        fn assert_completed_market_sell(
+            order: &Order,
+            order_id: OrderId,
+            filled_size: u64,
+            self_filled: u64,
+            base_size: u64,
+        ) {
+            match order {
+                crate::state::order::Order::Limit(_) => {
+                    panic!("Expected market order")
+                }
+                crate::state::order::Order::Market(market_order) => match market_order {
+                    crate::state::order::MarketOrder::Sell(market_sell_order) => {
+                        assert_eq!(market_sell_order.filled_size, filled_size);
+                        assert_eq!(market_sell_order.common.id, order_id);
+                        assert_eq!(market_sell_order.self_filled, self_filled);
+                        assert_eq!(market_sell_order.base_size, base_size);
+                    }
+                    crate::state::order::MarketOrder::Buy(_) => {
+                        panic!("Expect market sell")
+                    }
+                },
             }
         }
 
@@ -1095,20 +1175,8 @@ mod tests {
                 assert_eq!(completed_orders.len(), 1);
                 assert_eq!(completed_orders[0].get_id(), 10);
 
-                assert_eq!(
-                    mm_1_account_info
-                        .get_open_order(2)
-                        .unwrap()
-                        .filled_base_lots,
-                    500
-                );
-                assert_eq!(
-                    mm_1_account_info
-                        .get_open_order(4)
-                        .unwrap()
-                        .filled_base_lots,
-                    400
-                );
+                assert_open_order(mm_1_account_info, 2, 500, 0);
+                assert_open_order(mm_1_account_info, 4, 400, 0);
 
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
@@ -1167,14 +1235,7 @@ mod tests {
                 assert_eq!(completed_orders[1].get_id(), 4);
 
                 let completed_order = &completed_orders[1];
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 600);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+                assert_completed_limit_order(completed_order, 4, 600, 0);
 
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
@@ -1189,14 +1250,8 @@ mod tests {
                 assert_eq!(completed_orders[1].get_id(), 6);
 
                 let completed_order = &completed_orders[1];
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 1000);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+
+                assert_completed_limit_order(completed_order, 6, 1000, 0);
             }
         }
 
@@ -1249,14 +1304,7 @@ mod tests {
                 assert_eq!(completed_orders[1].get_id(), 2);
 
                 let completed_order = &completed_orders[1];
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 1_000);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+                assert_completed_limit_order(completed_order, 2, 1000, 0);
 
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
@@ -1343,16 +1391,7 @@ mod tests {
                 assert_eq!(completed_orders[2].get_id(), 4);
 
                 let completed_order = &completed_orders[2];
-
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 500);
-                        assert_eq!(limit_order.self_filled, 100);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+                assert_completed_limit_order(completed_order, 4, 500, 100);
 
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
@@ -1367,14 +1406,7 @@ mod tests {
                 assert_eq!(completed_orders[1].get_id(), 6);
 
                 let completed_order = &completed_orders[1];
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 1000);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+                assert_completed_limit_order(completed_order, 6, 1000, 0);
             }
         }
 
@@ -1502,7 +1534,6 @@ mod tests {
                 let mut block_1 = create_block(vec![mm_self_fill]);
 
                 ledger_state.apply_block(&mut block_1);
-                println!("{:#?}", block_1);
 
                 {
                     // mm_1
@@ -1536,20 +1567,7 @@ mod tests {
 
                 assert_eq!(completed_orders.len(), 1);
                 let completed_order = completed_orders[0].clone();
-                match completed_order {
-                    crate::state::order::Order::Limit(_) => {
-                        panic!("Expected market order")
-                    }
-                    crate::state::order::Order::Market(market_order) => match market_order {
-                        crate::state::order::MarketOrder::Sell(_) => {
-                            panic!("Expect market buy")
-                        }
-                        crate::state::order::MarketOrder::Buy(market_buy_order) => {
-                            assert_eq!(market_buy_order.filled_size, 2_500_000);
-                            assert_eq!(market_buy_order.quote_size, 2_500_000);
-                        }
-                    },
-                }
+                assert_completed_market_buy(&completed_order, 12, 2_500_000, 0, 2_500_000);
             }
 
             // Check mm state
@@ -1568,15 +1586,7 @@ mod tests {
                 assert_eq!(completed_orders[2].get_id(), 4);
 
                 let completed_order = &completed_orders[2];
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 500);
-                        assert_eq!(limit_order.self_filled, 100);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+                assert_completed_limit_order(completed_order, 4, 500, 100);
 
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
@@ -1598,7 +1608,7 @@ mod tests {
         #[test]
         pub fn test_market_sell_with_self_fill() {
             let mut ledger_state = test_setup();
-            let mut user_nonce = 0;
+            let user_nonce = 0;
 
             let mut user_sk = get_alice_sk();
             let user_pk = user_sk.verifying_key().to_bytes();
@@ -1616,7 +1626,6 @@ mod tests {
                 let mut block_1 = create_block(vec![mm_self_fill]);
 
                 ledger_state.apply_block(&mut block_1);
-                println!("{:#?}", block_1);
 
                 {
                     // mm_1
@@ -1650,20 +1659,7 @@ mod tests {
 
                 assert_eq!(completed_orders.len(), 1);
                 let completed_order = completed_orders[0].clone();
-                match completed_order {
-                    crate::state::order::Order::Limit(_) => {
-                        panic!("Expected market order")
-                    }
-                    crate::state::order::Order::Market(market_order) => match market_order {
-                        crate::state::order::MarketOrder::Sell(market_sell_order) => {
-                            assert_eq!(market_sell_order.filled_size, 1000);
-                            assert_eq!(market_sell_order.self_filled, 0);
-                        }
-                        crate::state::order::MarketOrder::Buy(_) => {
-                            panic!("Expect market sell")
-                        }
-                    },
-                }
+                assert_completed_market_sell(&completed_order, 12, 1000, 0, 1000);
             }
 
             // Check mm state
@@ -1682,15 +1678,7 @@ mod tests {
                 assert_eq!(completed_orders[2].get_id(), 2);
 
                 let completed_order = &completed_orders[2];
-                match completed_order {
-                    crate::state::order::Order::Limit(limit_order) => {
-                        assert_eq!(limit_order.filled_base_lots, 700);
-                        assert_eq!(limit_order.self_filled, 300);
-                    }
-                    crate::state::order::Order::Market(_market_order) => {
-                        panic!("Expected limit order")
-                    }
-                }
+                assert_completed_limit_order(completed_order, 2, 700, 300);
 
                 // mm 2
                 let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
@@ -1705,6 +1693,220 @@ mod tests {
                 let order = mm_2_account_info.get_open_order(1).unwrap();
 
                 assert_eq!(order.filled_base_lots, 300);
+            }
+        }
+
+        #[test]
+        pub fn test_market_buy_with_user_self_fill() {
+            let mut ledger_state = test_setup();
+            let mut user_nonce = 0;
+
+            let mut user_sk = get_alice_sk();
+            let user_pk = user_sk.verifying_key().to_bytes();
+
+            // self fill - 100 lots
+            {
+                let mut mm_1_sk = get_bob_sk();
+                let mm_self_fill = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Buy,
+                    OrderType::Market(250_000),
+                    7,
+                );
+                let mut block_1 = create_block(vec![mm_self_fill]);
+
+                ledger_state.apply_block(&mut block_1);
+
+                {
+                    // mm_1
+                    let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
+                    let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
+                    let self_filled_order = mm_1_account_info.get_open_order(4).unwrap();
+                    assert_eq!(self_filled_order.self_filled, 100);
+                    assert_eq!(self_filled_order.filled_base_lots, 0);
+                }
+            }
+
+            // id 12
+            let user_sell_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Sell,
+                OrderType::Limit(2500, 300),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            let mut block_1 = create_block(vec![user_sell_1]);
+
+            ledger_state.apply_block(&mut block_1);
+
+            // id 13 - Should be filled by mm1
+            let user_buy_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Buy,
+                OrderType::Market(1650 * 2500),
+                user_nonce,
+            );
+
+            let mut block_2 = create_block(vec![user_buy_1]);
+
+            ledger_state.apply_block(&mut block_2);
+            // Check account info state
+            {
+                let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
+
+                // User's market buy should self fill 150 lots
+                assert_eq!(open_orders.len(), 1);
+                assert_open_order(user_account_info, 12, 0, 150);
+
+                assert_eq!(completed_orders.len(), 1);
+                let completed_order = completed_orders[0].clone();
+                assert_completed_market_buy(
+                    &completed_order,
+                    13,
+                    3_750_000,
+                    150 * 2500,
+                    2500 * 1650,
+                );
+            }
+
+            // Check mm state
+            {
+                // mm_1
+                let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
+                let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
+
+                assert_eq!(open_orders.len(), 4);
+
+                assert_eq!(completed_orders.len(), 3);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 11);
+                assert_eq!(completed_orders[2].get_id(), 4);
+
+                let completed_order = &completed_orders[2];
+                assert_completed_limit_order(completed_order, 4, 500, 100);
+
+                // mm 2
+                let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
+                let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
+
+                assert_eq!(open_orders.len(), 3);
+                assert_eq!(completed_orders.len(), 2);
+
+                assert_eq!(completed_orders[0].get_id(), 5);
+                assert_eq!(completed_orders[1].get_id(), 6);
+                let completed_order = &completed_orders[1];
+                assert_completed_limit_order(completed_order, 6, 1000, 0);
+            }
+        }
+
+        #[test]
+        pub fn test_market_sell_with_user_self_fill() {
+            let mut ledger_state = test_setup();
+            let mut user_nonce = 0;
+
+            let mut user_sk = get_alice_sk();
+            let user_pk = user_sk.verifying_key().to_bytes();
+
+            // self fill
+            {
+                let mut mm_1_sk = get_bob_sk();
+                let mm_self_fill = create_order_txn(
+                    &mut mm_1_sk,
+                    0,
+                    OrderDirection::Sell,
+                    OrderType::Market(300),
+                    7,
+                );
+                let mut block_1 = create_block(vec![mm_self_fill]);
+
+                ledger_state.apply_block(&mut block_1);
+
+                {
+                    // mm_1
+                    let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
+                    let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
+                    let self_filled_order = mm_1_account_info.get_open_order(2).unwrap();
+                    assert_eq!(self_filled_order.self_filled, 300);
+                    assert_eq!(self_filled_order.filled_base_lots, 0);
+                }
+            }
+            // id 12
+            let user_buy_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Buy,
+                OrderType::Limit(2450, 500),
+                user_nonce,
+            );
+            user_nonce += 1;
+
+            let mut block_1 = create_block(vec![user_buy_1]);
+
+            ledger_state.apply_block(&mut block_1);
+
+            // id 13 - Should be filled by mm1
+            let user_sell_1 = create_order_txn(
+                &mut user_sk,
+                0,
+                OrderDirection::Sell,
+                OrderType::Market(1100),
+                user_nonce,
+            );
+
+            let mut block_2 = create_block(vec![user_sell_1]);
+
+            ledger_state.apply_block(&mut block_2);
+            // Check account info state
+            {
+                let user_account_info = ledger_state.accounts.get(&user_pk).unwrap();
+                let open_orders = &user_account_info.open_orders;
+                let completed_orders = &user_account_info.completed_orders;
+
+                assert_eq!(open_orders.len(), 1);
+                assert_open_order(user_account_info, 12, 0, 400);
+
+                assert_eq!(completed_orders.len(), 1);
+                let completed_order = completed_orders[0].clone();
+                assert_completed_market_sell(&completed_order, 13, 700, 400, 1100);
+            }
+
+            // Check mm state
+            {
+                // mm_1
+                let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
+                let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
+                let open_orders = &mm_1_account_info.open_orders;
+                let completed_orders = &mm_1_account_info.completed_orders;
+
+                assert_eq!(open_orders.len(), 4);
+
+                assert_eq!(completed_orders.len(), 3);
+                assert_eq!(completed_orders[0].get_id(), 10);
+                assert_eq!(completed_orders[1].get_id(), 11);
+                assert_eq!(completed_orders[2].get_id(), 2);
+
+                let completed_order = &completed_orders[2];
+                assert_completed_limit_order(completed_order, 2, 700, 300);
+
+                // mm 2
+                let mm_2_pk = get_carol_sk().verifying_key().to_bytes();
+                let mm_2_account_info = ledger_state.accounts.get(&mm_2_pk).unwrap();
+                let open_orders = &mm_2_account_info.open_orders;
+                let completed_orders = &mm_2_account_info.completed_orders;
+
+                assert_eq!(open_orders.len(), 4);
+                assert_eq!(completed_orders.len(), 1);
+                assert_eq!(completed_orders[0].get_id(), 5);
             }
         }
     }
