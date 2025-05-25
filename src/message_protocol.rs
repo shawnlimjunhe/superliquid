@@ -6,6 +6,8 @@ use crate::hotstuff::message::HotStuffMessage;
 use crate::network;
 use crate::node::state::PeerId;
 use crate::state::asset::{Asset, AssetId};
+use crate::state::spot_clearinghouse::MarketId;
+use crate::state::spot_market::MarketInfo;
 use crate::state::state::AccountInfoWithBalances;
 use crate::types::message::Message;
 use crate::types::transaction::{PublicKeyHash, Sha256Hash, SignedTransaction};
@@ -21,6 +23,12 @@ pub enum AppMessage {
     Ack,
     AccountQuery(PublicKeyHash),
     AccountQueryResponse(AccountInfoWithBalances),
+
+    MarketInfoQuery(MarketId),
+    MarketInfoQueryResponse(Option<MarketInfo>),
+
+    MarketsQuery,
+    MarketsQueryResponse(Vec<MarketInfo>),
 
     AssetQuery,
     AssetQueryResponse(Vec<Asset>),

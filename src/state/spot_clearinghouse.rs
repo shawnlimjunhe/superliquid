@@ -10,7 +10,7 @@ use super::{
         ExecutionResults, LimitFillResult, LimitOrder, MarketOrder, MarketOrderMatchingResults,
         Order, OrderChange, OrderStatus, ResidualOrder, UserExecutionResult,
     },
-    spot_market::SpotMarket,
+    spot_market::{MarketInfo, SpotMarket},
 };
 
 pub type MarketId = usize;
@@ -148,6 +148,21 @@ impl SpotClearingHouse {
         self.asset_to_market_map.get(&pair).copied()
     }
 
+    pub fn get_market_info_from_id(&self, market_id: MarketId) -> Option<MarketInfo> {
+        let market = self.markets.get(market_id);
+        let Some(market) = market else {
+            return None;
+        };
+        Some(market.get_market_info())
+    }
+
+    pub fn get_markets(&self) -> Vec<MarketInfo> {
+        self.markets
+            .iter()
+            .map(|market| market.get_market_info())
+            .collect()
+    }
+
     pub fn get_quote_base_tick_from_id(
         &self,
         market_id: MarketId,
@@ -168,12 +183,20 @@ impl SpotClearingHouse {
         normalised_pair: (AssetId, AssetId),
         tick: u32,
         tick_decimals: u8,
+        base_asset: AssetId,
+        quote_asset: AssetId,
+        base_asset_name: String,
+        quote_asset_name: String,
     ) -> MarketId {
         let market_id = self.next_id;
+
         let market = SpotMarket::new(
             market_id,
-            normalised_pair.0,
-            normalised_pair.1,
+            normalised_pair,
+            base_asset,
+            quote_asset,
+            base_asset_name,
+            quote_asset_name,
             tick,
             tick_decimals,
         );
@@ -187,6 +210,8 @@ impl SpotClearingHouse {
         &mut self,
         base_asset: AssetId,
         quote_asset: AssetId,
+        base_asset_name: String,
+        quote_asset_name: String,
         tick: u32,
         tick_decimals: u8,
     ) -> MarketId {
@@ -196,7 +221,15 @@ impl SpotClearingHouse {
 
         let normalised_pair = Self::normalise_pair(base_asset, quote_asset);
 
-        self.create_new_market(normalised_pair, tick, tick_decimals)
+        self.create_new_market(
+            normalised_pair,
+            tick,
+            tick_decimals,
+            base_asset,
+            quote_asset,
+            base_asset_name,
+            quote_asset_name,
+        )
     }
 
     pub fn get_account_token_balance_mut(
@@ -890,6 +923,8 @@ mod tests {
         spot_clearinghouse.add_faucet_account();
 
         let base_asset = 0;
+        let base_asset_name = "".to_string();
+        let quote_asset_name = "".to_string();
         let quote_asset = 1;
         let tick = 100;
         let tick_decimals = 2;
@@ -900,7 +935,14 @@ mod tests {
             tick_decimals: tick_decimals,
         };
 
-        spot_clearinghouse.add_market(base_asset, quote_asset, tick, tick_decimals);
+        spot_clearinghouse.add_market(
+            base_asset,
+            quote_asset,
+            base_asset_name,
+            quote_asset_name,
+            tick,
+            tick_decimals,
+        );
 
         // Fund accounts
         {

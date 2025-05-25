@@ -6,6 +6,8 @@ use tokio::{
     sync::{Mutex, mpsc, oneshot},
 };
 
+use crate::state::spot_clearinghouse::MarketId;
+use crate::state::spot_market::MarketInfo;
 use crate::{
     message_protocol::{self, AppMessage, ControlMessage},
     node::{peer::broadcast::broadcast_transaction, state::Node},
@@ -27,12 +29,16 @@ use super::listener::ClientSocket;
 pub enum ClientQuery {
     AccountQuery(PublicKeyHash),
     AssetQuery,
+    MarketInfoQuery(MarketId),
+    MarketsQuery,
 }
 
 #[derive(Debug)]
 pub enum ClientResponse {
     AccountQueryReponse(AccountInfoWithBalances),
     AssetQueryResponse(Vec<Asset>),
+    MarketInfoQueryResponse(Option<MarketInfo>),
+    MarketsQueryResponse(Vec<MarketInfo>),
 }
 
 pub struct QueryRequest {
@@ -62,6 +68,13 @@ pub(super) async fn handle_client_connection(
             }
             Some(Message::Application(AppMessage::AssetQuery)) => {
                 handle_asset_query(socket.writer.clone(), to_replica_tx.clone()).await?;
+            }
+            Some(Message::Application(AppMessage::MarketsQuery)) => {
+                handle_markets_query(socket.writer.clone(), to_replica_tx.clone()).await?;
+            }
+            Some(Message::Application(AppMessage::MarketInfoQuery(market_id))) => {
+                handle_market_query(market_id, socket.writer.clone(), to_replica_tx.clone())
+                    .await?;
             }
             Some(Message::Connection(ControlMessage::End)) => {
                 return Ok(());
@@ -133,6 +146,59 @@ pub(super) async fn handle_asset_query(
             message_protocol::send_message(
                 writer,
                 &Message::Application(AppMessage::AssetQueryResponse(asset_info)),
+            )
+            .await?;
+        }
+        other => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Expected AssetQueryResponse, got {:?}", other),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn handle_market_query(
+    market_id: MarketId,
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
+    let query = ClientQuery::MarketInfoQuery(market_id);
+    let response = send_query_to_replica(query, to_replica_tx).await?;
+
+    match response {
+        ClientResponse::MarketInfoQueryResponse(market_info) => {
+            // send to client
+            message_protocol::send_message(
+                writer,
+                &Message::Application(AppMessage::MarketInfoQueryResponse(market_info)),
+            )
+            .await?;
+        }
+        other => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Expected AssetQueryResponse, got {:?}", other),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn handle_markets_query(
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+    to_replica_tx: mpsc::Sender<ReplicaInBound>,
+) -> Result<()> {
+    let query = ClientQuery::MarketsQuery;
+    let response = send_query_to_replica(query, to_replica_tx).await?;
+
+    match response {
+        ClientResponse::MarketsQueryResponse(markets_info) => {
+            // send to client
+            message_protocol::send_message(
+                writer,
+                &Message::Application(AppMessage::MarketsQueryResponse(markets_info)),
             )
             .await?;
         }

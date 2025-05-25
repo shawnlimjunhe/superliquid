@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::{
     config,
     hotstuff::block::Block,
+    node::client::handler::{ClientQuery, ClientResponse},
     types::transaction::{
         CancelOrderTransaction, OrderTransaction, PublicKeyHash, PublicKeyString,
         SignedTransaction, TransactionStatus, UnsignedTransaction,
@@ -11,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    asset::{AssetId, AssetManager},
+    asset::{Asset, AssetId, AssetManager},
     order::{
         self, ExecutionResults, LimitOrder, MarketOrder, Order, OrderDirection, OrderId,
         OrderStateManager, OrderStatus, ResidualOrder,
@@ -19,6 +20,7 @@ use super::{
     spot_clearinghouse::{
         AccountBalance, AccountTokenBalance, MarketId, MarketPrecision, SpotClearingHouse,
     },
+    spot_market::MarketInfo,
 };
 
 pub type Balance = u128;
@@ -118,6 +120,18 @@ impl LedgerState {
             spot_clearinghouse: spot_clearinghouse,
             perps_clearinghouse: (),
         }
+    }
+
+    pub fn get_asset_info(&self) -> Vec<Asset> {
+        self.asset_manager.assets.clone()
+    }
+
+    pub fn get_market_info(&self, market_id: MarketId) -> Option<MarketInfo> {
+        self.spot_clearinghouse.get_market_info_from_id(market_id)
+    }
+
+    pub fn get_markets(&self) -> Vec<MarketInfo> {
+        self.spot_clearinghouse.get_markets()
     }
 
     pub(crate) fn get_account_info_with_balances_or_default(
@@ -583,6 +597,28 @@ impl LedgerState {
     pub(crate) fn apply_block(&mut self, block: &mut Block) -> Vec<Option<(PublicKeyHash, Nonce)>> {
         return self.apply(block.transactions_mut());
     }
+
+    pub fn handle_query(&self, query: ClientQuery) -> ClientResponse {
+        match query {
+            crate::node::client::handler::ClientQuery::AccountQuery(public_key) => {
+                let account_info_with_balances =
+                    self.get_account_info_with_balances_or_default(&public_key);
+                ClientResponse::AccountQueryReponse(account_info_with_balances)
+            }
+            crate::node::client::handler::ClientQuery::AssetQuery => {
+                let asset_info = self.get_asset_info();
+                ClientResponse::AssetQueryResponse(asset_info)
+            }
+            crate::node::client::handler::ClientQuery::MarketInfoQuery(market_id) => {
+                let market_info = self.get_market_info(market_id);
+                ClientResponse::MarketInfoQueryResponse(market_info)
+            }
+            crate::node::client::handler::ClientQuery::MarketsQuery => {
+                let market_infos = self.get_markets();
+                ClientResponse::MarketsQueryResponse(market_infos)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -777,6 +813,9 @@ mod tests {
             let mut ledger_state = LedgerState::new();
             let base = 0;
             let quote = 1;
+            let base_asset_name = "".to_string();
+            let quote_asset_name = "".to_string();
+
             let tick = 100;
             let tick_decimals = 2;
             let _precision = MarketPrecision {
@@ -789,9 +828,14 @@ mod tests {
             const DEFAULT_BASE: u128 = 1_000_000_000;
             const DEFAULT_QUOTE: u128 = 1_000_000_000_000;
 
-            ledger_state
-                .spot_clearinghouse
-                .add_market(base, quote, tick, tick_decimals);
+            ledger_state.spot_clearinghouse.add_market(
+                base,
+                quote,
+                base_asset_name,
+                quote_asset_name,
+                tick,
+                tick_decimals,
+            );
 
             let user_sk = get_alice_sk();
             let mut mm_1_sk = get_bob_sk();

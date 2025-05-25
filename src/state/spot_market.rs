@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use super::{
     asset::AssetId,
     order::{
@@ -7,6 +9,21 @@ use super::{
     },
     spot_clearinghouse::{MarketId, MarketPrecision, base_to_quote_lots, quote_lots_to_base_lots},
 };
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LevelInfo {
+    price: u64,
+    volume: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MarketInfo {
+    pub market_id: MarketId,
+    pub market_name: String,
+    pub last_executed_price: Option<u64>,
+    pub best_asks_info: Option<LevelInfo>,
+    pub best_bids_info: Option<LevelInfo>,
+}
 
 #[derive(Debug)]
 pub struct Level {
@@ -21,6 +38,8 @@ pub struct SpotMarket {
     pub asset_two: AssetId,
     pub base_asset: AssetId,
     pub quote_asset: AssetId,
+    pub base_asset_name: String,
+    pub quote_asset_name: String,
     pub tick: u32,
     pub tick_decimals: u8,
     pub last_executed_price: Option<u64>,
@@ -34,23 +53,18 @@ pub struct SpotMarket {
 impl SpotMarket {
     pub(crate) fn new(
         market_id: MarketId,
+        normalised_pair: (AssetId, AssetId),
         base_asset: AssetId,
         quote_asset: AssetId,
+        base_asset_name: String,
+        quote_asset_name: String,
         tick: u32,
         tick_decimals: u8,
     ) -> Self {
-        let (asset_one, asset_two) = {
-            if base_asset < quote_asset {
-                (base_asset, quote_asset)
-            } else {
-                (quote_asset, base_asset)
-            }
-        };
-
         Self {
             market_id,
-            asset_one,
-            asset_two,
+            asset_one: normalised_pair.0,
+            asset_two: normalised_pair.1,
             base_asset,
             quote_asset,
             bids_levels: vec![],
@@ -58,6 +72,8 @@ impl SpotMarket {
             tick,
             tick_decimals,
             last_executed_price: None,
+            base_asset_name: base_asset_name,
+            quote_asset_name: quote_asset_name.to_string(),
         }
     }
 
@@ -669,6 +685,26 @@ impl SpotMarket {
             self.last_executed_price = Some(price);
         }
     }
+
+    pub fn get_market_info(&self) -> MarketInfo {
+        let best_ask_info = self.asks_levels.last().map(|level| LevelInfo {
+            price: level.price,
+            volume: level.volume,
+        });
+
+        let best_bid_info = self.bids_levels.last().map(|level| LevelInfo {
+            price: level.price,
+            volume: level.volume,
+        });
+
+        MarketInfo {
+            market_id: self.market_id,
+            market_name: format!("{}/{}", self.base_asset_name, self.quote_asset_name),
+            last_executed_price: self.last_executed_price,
+            best_asks_info: best_ask_info,
+            best_bids_info: best_bid_info,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -765,6 +801,8 @@ mod tests {
                 tick_decimals,
                 tick,
                 last_executed_price: None,
+                base_asset_name: "".to_string(),
+                quote_asset_name: "".to_string(),
             }
         }
     }
