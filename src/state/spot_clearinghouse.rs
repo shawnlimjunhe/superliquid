@@ -73,6 +73,10 @@ impl AccountBalance {
             asset_balances: vec![],
         }
     }
+
+    pub fn find_asset_id(&self, asset_id: AssetId) -> Option<&AccountTokenBalance> {
+        self.asset_balances.iter().find(|b| b.asset_id == asset_id)
+    }
 }
 
 pub struct SpotClearingHouse {
@@ -340,8 +344,12 @@ impl SpotClearingHouse {
                         );
 
                         expected_balance_lock = quote_amount;
-                        if quote_token_balance.available_balance < quote_amount as u128 {
-                            println!("Not enough balance");
+                        let available = quote_token_balance.available_balance;
+                        if available < quote_amount as u128 {
+                            println!(
+                                "Not enough balance, available: {}, needed: {}",
+                                available, quote_amount
+                            );
                             return None;
                         }
                         quote_token_balance.available_balance -= quote_amount as u128;
@@ -355,8 +363,12 @@ impl SpotClearingHouse {
                         let base_amount = base_lots * precision.base_lot_size as u64;
                         expected_balance_lock = base_amount;
 
-                        if base_token_balance.available_balance < base_amount as u128 {
-                            println!("Not enough balance");
+                        let available = base_token_balance.available_balance;
+                        if available < base_amount as u128 {
+                            println!(
+                                "Not enough balance, available: {}, needed: {}",
+                                available, base_amount
+                            );
                             return None;
                         }
                         base_token_balance.available_balance -= base_amount as u128;

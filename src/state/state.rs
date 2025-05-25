@@ -109,9 +109,22 @@ impl LedgerState {
         let (pk, _) = config::retrieve_faucet_keys();
         let mut accounts: HashMap<PublicKeyHash, AccountInfo> = HashMap::new();
         accounts.insert(pk.to_bytes(), AccountInfo::create_faucet());
+        let asset_manager = AssetManager::new();
+
+        let asset_0 = asset_manager.assets.get(0).expect("Asset 0 to be present");
+        let asset_1 = asset_manager.assets.get(1).expect("Asset 1 to be present");
 
         let mut spot_clearinghouse = SpotClearingHouse::new();
         spot_clearinghouse.add_faucet_account();
+
+        spot_clearinghouse.add_market(
+            0,
+            1,
+            asset_0.asset_name.clone(),
+            asset_1.asset_name.clone(),
+            100,
+            2,
+        );
 
         LedgerState {
             accounts,

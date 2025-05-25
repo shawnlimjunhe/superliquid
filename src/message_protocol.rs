@@ -135,6 +135,43 @@ pub async fn send_assets_query(
     }
 }
 
+pub async fn send_markets_query(
+    reader: Arc<Mutex<OwnedReadHalf>>,
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+) -> Result<Vec<MarketInfo>> {
+    let msg = AppMessage::MarketsQuery;
+    send_message(writer, &Message::Application(msg)).await?;
+
+    match receive_message(reader).await? {
+        Some(Message::Application(AppMessage::MarketsQueryResponse(markets_info))) => {
+            Ok(markets_info)
+        }
+        other => Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Expected Response, got {:?}", other),
+        )),
+    }
+}
+
+pub async fn send_market_info_query(
+    market_id: MarketId,
+    reader: Arc<Mutex<OwnedReadHalf>>,
+    writer: Arc<Mutex<OwnedWriteHalf>>,
+) -> Result<Option<MarketInfo>> {
+    let msg = AppMessage::MarketInfoQuery(market_id);
+    send_message(writer, &Message::Application(msg)).await?;
+
+    match receive_message(reader).await? {
+        Some(Message::Application(AppMessage::MarketInfoQueryResponse(market_info))) => {
+            Ok(market_info)
+        }
+        other => Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Expected Response, got {:?}", other),
+        )),
+    }
+}
+
 pub async fn send_query(
     reader: Arc<Mutex<OwnedReadHalf>>,
     writer: Arc<Mutex<OwnedWriteHalf>>,

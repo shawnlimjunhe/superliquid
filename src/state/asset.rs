@@ -22,15 +22,15 @@ impl AssetManager {
         let asset_0 = Asset {
             asset_id: 0,
             asset_name: "SUPE".to_owned(),
-            decimals: 6,
-            lot_size: 1000,
+            decimals: 4,
+            lot_size: 100,
         };
 
         let asset_1 = Asset {
             asset_id: 1,
             asset_name: "USD".to_owned(),
-            decimals: 6,
-            lot_size: 1000,
+            decimals: 4,
+            lot_size: 100,
         };
 
         let assets = vec![asset_0, asset_1];

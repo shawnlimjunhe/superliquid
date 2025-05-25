@@ -12,8 +12,8 @@ use super::{
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LevelInfo {
-    price: u64,
-    volume: u64,
+    pub price: u64,
+    pub volume: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -23,6 +23,12 @@ pub struct MarketInfo {
     pub last_executed_price: Option<u64>,
     pub best_asks_info: Option<LevelInfo>,
     pub best_bids_info: Option<LevelInfo>,
+    pub tick: u32,
+    pub tick_decimals: u8,
+    pub base_name: String,
+    pub quote_name: String,
+    pub base_asset_id: AssetId,
+    pub quote_asset_id: AssetId,
 }
 
 #[derive(Debug)]
@@ -703,6 +709,12 @@ impl SpotMarket {
             last_executed_price: self.last_executed_price,
             best_asks_info: best_ask_info,
             best_bids_info: best_bid_info,
+            tick: self.tick,
+            tick_decimals: self.tick_decimals,
+            base_name: self.base_asset_name.clone(),
+            quote_name: self.quote_asset_name.clone(),
+            base_asset_id: self.base_asset,
+            quote_asset_id: self.quote_asset,
         }
     }
 }
