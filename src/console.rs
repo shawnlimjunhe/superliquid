@@ -177,8 +177,8 @@ fn display_spot_actions() {
     println!("Available actions:");
     println!("  limit buy <price> <base_amount>   - Place a limit buy order");
     println!("  limit sell <price> <base_amount>  - Place a limit sell order");
-    println!("  market buy <base_amount>          - Market buy (spend quote)");
-    println!("  market sell <quote_amount>        - Market sell (receive quote)");
+    println!("  market buy <quote_amount>          - Market buy (spend quote)");
+    println!("  market sell <base_amount>        - Market sell (receive quote)");
     println!("  open                              - View your open orders");
     println!("  cancel <order-id>                 - Cancel order");
     println!("  re                                - Refresh");
