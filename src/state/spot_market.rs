@@ -164,7 +164,9 @@ impl SpotMarket {
                 let unfilled_size = order.base_lots - order.filled_base_lots;
                 level.volume -= unfilled_size;
 
-                if level.cancelled > (level.orders.len() / 2) as u32 {
+                if level.volume == 0 {
+                    levels.remove(mid);
+                } else if level.cancelled > (level.orders.len() / 2) as u32 {
                     // prune when vector is sparse enough
                     level
                         .orders

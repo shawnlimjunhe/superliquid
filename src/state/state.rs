@@ -123,7 +123,7 @@ impl LedgerState {
             asset_0.asset_name.clone(),
             asset_1.asset_name.clone(),
             100,
-            2,
+            3,
         );
 
         LedgerState {
