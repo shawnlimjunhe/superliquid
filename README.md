@@ -29,7 +29,7 @@ This repository implements the core components of a HotStuff-style consensus mec
 * **Peer-to-Peer Network Layer**: Built with `tokio` for efficient asynchronous communication.
 * **Replica Logic**: Implements the chained HotStuff pipelining for performance.
 * **Leader Rotation**: Employs a round-robin strategy (`leader_id = view % num_replicas`).
-* **Byzantine Fault Tolerance**: Designed to tolerate up to `$f$` Byzantine nodes in a network of `$3f + 1$` replicas, ensuring safety and liveness.
+* **Byzantine Fault Tolerance**: Designed to tolerate up to `**f` Byzantine nodes in a network of `3f + 1` replicas, ensuring safety and liveness.
 * **Integrated Spot DEX**: Features on-chain order book matching and settlement as part of the block execution, using **price-time** priority directly from the state.
 
 The purpose of this project is to learn, experiment, and demonstrate a BFT consensus mechanism in Rust along with in-protocol financial primitives. The consensus engine and spot DEX are largely complete. Work is ongoing to extend support to a perpetuals DEX with margin, funding rates, and liquidations. This project is not production-ready.
@@ -197,28 +197,31 @@ The client console provides commands to:
 After starting the console, type `help` to see available commands.
 
 #### Example flow
+Below is a walkthrough of placing and matching a spot trade through the CLI console.  
+Note: Transactions may take a moment to finalize after submission, as they must be included in a committed block. The `SUPE` and `USD` assets, along with the `SUPE/USD` market (ID: 0), are initialized at genesis.
+
+
 1. Create a user account with the `create` command.
-![Create account](./assets/create.png)
+![Create account](./assets/create_account.PNG)
 2. Drip `USD` or `SUPE` to your account using `drip SUPE` or `drip USD`.
-![Drip funds into account](./assets/drip.png)
+![Drip funds into account](./assets/drip.PNG)
 3. Query your account balance using the `query` command.
-4. View available markets with the "markets" command.
-5. Select the "SUPE/USD" market with id: 0. The "SUPE" and "USD"   
-assets and "SUPE/USD" market are created on genesis.
-![View and select markets](./assets/markets.png)
-6. Submit a limit buy order
-![Before Limit Buy](./assets/limit_buy.png)
-7. The submitted order should be reflected on the market. (refresh if changes do not show immediately)
-![Before Limit Buy](./assets/limit_buy_post.png)
-8. Create and fund another account to fill this order
-![Create account 2](./assets/create_account2.png)
-9. Fill account 1's limit buy order with a market sell
-![Market sell](./assets/market_sell.png)
-10. Orders should match and settle with both parties' balances having been updated
+4. View available markets using `markets`. Select the `SUPE/USD` market (ID: 0).
+![View and select markets](./assets/markets.PNG)
+5. Submit a limit buy order.
+![Before Limit Buy](./assets/limit_buy.PNG)
+6. Your order should now appear in the order book.  
+   (Use `re` again to refresh the view.)
+![After Limit Buy](./assets/limit_buy_post.PNG)
+7. Create and fund another account to fill this order.
+![Create account 2](./assets/create_account2.PNG)
+8. Submit a market sell from the second account to match the existing order.
+![Market sell](./assets/market_sell.PNG)
+9. Once the trade settles, balances will be updated for both accounts
 - Account 1:
-![Filled order](./assets/limit_fill.png)
+![Filled order - Account 1](./assets/limit_fill.PNG)
 - Account 2:
-![Filled order](./assets/market_sell_post.png)
+![Filled order - Account 2](./assets/market_sell_post.PNG)
 
 
 
@@ -236,7 +239,7 @@ Ensure each running instance has the appropriate `.env` file available in its wo
 You can monitor the console output to see:
 
 - **View changes** when the pacemaker times out or receives higher-view messages.
-
+- **Commits** when the network successfully commits a block.
 ---
 
 ## Roadmap
