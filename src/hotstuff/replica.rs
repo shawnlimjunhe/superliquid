@@ -139,6 +139,12 @@ impl HotStuffReplica {
         2 * ((n - 1) / 3) + 1
     }
 
+    fn validate_block_transactions(node: &Block) -> bool {
+        node.transactions()
+            .iter()
+            .all(|transaction| transaction.verify_sender())
+    }
+
     /// Try to build QC(view) once any block‐hash has n‑f signatures.
     /// Returns None if no such QC exists yet.
     pub fn try_create_qc_for_view(&self, view: ViewNumber) -> Option<QuorumCertificate> {
@@ -438,8 +444,14 @@ impl HotStuffReplica {
         let is_valid_sig = { b_star_justify.verify(&self.validator_set, self.quorum_threshold()) };
 
         if is_safe && is_valid_sig {
-            let block_merkle_root = b_star.read().unwrap().hash_block_transaction();
-            if block_merkle_root != b_star.read().unwrap().merkle_root() {
+            let block = b_star.read().unwrap();
+
+            if !Self::validate_block_transactions(&block) {
+                return None;
+            }
+
+            let block_merkle_root = block.hash_block_transaction();
+            if block_merkle_root != block.merkle_root() {
                 return None;
             }
             outbound_msg = Some(self.vote_message(&b_star.read().unwrap()));
