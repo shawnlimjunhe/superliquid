@@ -1390,7 +1390,7 @@ mod tests {
                     &mut mm_1_sk,
                     0,
                     OrderDirection::Buy,
-                    OrderType::Market(250_000),
+                    OrderType::Market(250_00),
                     7,
                 );
                 let mut block_1 = create_block(vec![mm_self_fill]);
@@ -1585,7 +1585,7 @@ mod tests {
                     &mut mm_1_sk,
                     0,
                     OrderDirection::Buy,
-                    OrderType::Market(250_000),
+                    OrderType::Market(250_00),
                     7,
                 );
                 let mut block_1 = create_block(vec![mm_self_fill]);
@@ -1607,7 +1607,7 @@ mod tests {
                 &mut user_sk,
                 0,
                 OrderDirection::Buy,
-                OrderType::Market(1000 * 2500),
+                OrderType::Market(1000 * 250),
                 user_nonce,
             );
 
@@ -1624,7 +1624,7 @@ mod tests {
 
                 assert_eq!(completed_orders.len(), 1);
                 let completed_order = completed_orders[0].clone();
-                assert_completed_market_buy(&completed_order, 12, 2_500_000, 0, 2_500_000);
+                assert_completed_market_buy(&completed_order, 12, 2_500_00, 0, 2_500_00);
             }
 
             // Check mm state
@@ -1768,7 +1768,7 @@ mod tests {
                     &mut mm_1_sk,
                     0,
                     OrderDirection::Buy,
-                    OrderType::Market(250_000),
+                    OrderType::Market(250_00),
                     7,
                 );
                 let mut block_1 = create_block(vec![mm_self_fill]);
@@ -1779,6 +1779,7 @@ mod tests {
                     // mm_1
                     let mm_1_pk = get_bob_sk().verifying_key().to_bytes();
                     let mm_1_account_info = ledger_state.accounts.get(&mm_1_pk).unwrap();
+                    println!("{:?}", mm_1_account_info);
                     let self_filled_order = mm_1_account_info.get_open_order(4).unwrap();
                     assert_eq!(self_filled_order.self_filled, 100);
                     assert_eq!(self_filled_order.filled_base_lots, 0);
@@ -1804,7 +1805,7 @@ mod tests {
                 &mut user_sk,
                 0,
                 OrderDirection::Buy,
-                OrderType::Market(1650 * 2500),
+                OrderType::Market(1650 * 250),
                 user_nonce,
             );
 
@@ -1823,13 +1824,7 @@ mod tests {
 
                 assert_eq!(completed_orders.len(), 1);
                 let completed_order = completed_orders[0].clone();
-                assert_completed_market_buy(
-                    &completed_order,
-                    13,
-                    3_750_000,
-                    150 * 2500,
-                    2500 * 1650,
-                );
+                assert_completed_market_buy(&completed_order, 13, 3_750_00, 150 * 250, 250 * 1650);
             }
 
             // Check mm state
