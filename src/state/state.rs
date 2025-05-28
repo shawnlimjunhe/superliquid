@@ -7,7 +7,7 @@ use crate::{
     node::client::handler::{ClientQuery, ClientResponse},
     types::transaction::{
         CancelOrderTransaction, OrderTransaction, PublicKeyHash, PublicKeyString,
-        SignedTransaction, TransactionStatus, UnsignedTransaction,
+        SignedTransaction, TransactionStatus, TransferTransaction, UnsignedTransaction,
     },
 };
 
@@ -508,6 +508,85 @@ impl LedgerState {
         return Some((user_account, account.expected_nonce));
     }
 
+    pub(crate) fn handle_transfer_transaction(
+        &mut self,
+        transaction: &mut TransferTransaction,
+    ) -> Option<(PublicKeyHash, Nonce)> {
+        let new_expected_nonce = {
+            let from_account_info = self.get_account_info_mut(&transaction.from);
+
+            if transaction.nonce < from_account_info.expected_nonce {
+                transaction.status = TransactionStatus::Rejected("Duplicate Nonce".to_string());
+                return None;
+            }
+
+            if transaction.nonce > from_account_info.expected_nonce {
+                transaction.status = TransactionStatus::Rejected("Out of order nonce".to_string());
+                return None;
+            }
+
+            from_account_info.expected_nonce += 1;
+            let new_expected_nonce = from_account_info.expected_nonce;
+
+            let from_account_balances = self.get_account_spot_balances_mut(&transaction.from);
+
+            let from_token_balance_opt = from_account_balances
+                .asset_balances
+                .iter_mut()
+                .find(|a| a.asset_id == transaction.asset_id);
+
+            let Some(from_token_balance) = from_token_balance_opt else {
+                transaction.status = TransactionStatus::Error(ExecError::InsufficientFunds {
+                    from: PublicKeyString::from_bytes(transaction.from),
+                    have: 0,
+                    need: transaction.amount,
+                });
+                return Some((transaction.from, new_expected_nonce));
+            };
+
+            if from_token_balance.available_balance < transaction.amount {
+                transaction.status = TransactionStatus::Error(ExecError::InsufficientFunds {
+                    from: PublicKeyString::from_bytes(transaction.from),
+                    have: from_token_balance.total_balance,
+                    need: transaction.amount,
+                });
+
+                return Some((transaction.from, new_expected_nonce));
+            }
+            from_token_balance.available_balance -= transaction.amount;
+            from_token_balance.total_balance -= transaction.amount;
+            new_expected_nonce
+        };
+
+        // Create account info if not created
+        {
+            self.get_account_info_mut(&transaction.to);
+        }
+        let to_account_balances = self.get_account_spot_balances_mut(&transaction.to);
+        let to_token_balance_opt = to_account_balances
+            .asset_balances
+            .iter_mut()
+            .find(|a| a.asset_id == transaction.asset_id);
+
+        match to_token_balance_opt {
+            Some(account_balance) => {
+                account_balance.total_balance += transaction.amount;
+                account_balance.available_balance += transaction.amount;
+            }
+
+            None => to_account_balances
+                .asset_balances
+                .push(AccountTokenBalance {
+                    asset_id: transaction.asset_id,
+                    available_balance: transaction.amount,
+                    total_balance: transaction.amount,
+                }),
+        }
+
+        transaction.status = TransactionStatus::Executed;
+        return Some((transaction.from, new_expected_nonce));
+    }
+
     pub(crate) fn apply(
         &mut self,
         transactions: &mut Vec<SignedTransaction>,
@@ -516,84 +595,8 @@ impl LedgerState {
 
         for transaction in transactions.iter_mut() {
             match &mut transaction.tx {
-                UnsignedTransaction::Transfer(tx) => {
-                    let new_expected_nonce = {
-                        let from_account_info = self.get_account_info_mut(&tx.from);
-
-                        if tx.nonce < from_account_info.expected_nonce {
-                            tx.status = TransactionStatus::Rejected("Duplicate Nonce".to_string());
-                            continue;
-                        }
-
-                        if tx.nonce > from_account_info.expected_nonce {
-                            tx.status =
-                                TransactionStatus::Rejected("Out of order nonce".to_string());
-                            continue;
-                        }
-
-                        from_account_info.expected_nonce += 1;
-                        let new_expected_nonce = from_account_info.expected_nonce;
-
-                        let from_account_balances = self.get_account_spot_balances_mut(&tx.from);
-
-                        let from_token_balance_opt = from_account_balances
-                            .asset_balances
-                            .iter_mut()
-                            .find(|a| a.asset_id == tx.asset_id);
-
-                        let Some(from_token_balance) = from_token_balance_opt else {
-                            tx.status = TransactionStatus::Error(ExecError::InsufficientFunds {
-                                from: PublicKeyString::from_bytes(tx.from),
-                                have: 0,
-                                need: tx.amount,
-                            });
-                            account_nonces.push(Some((tx.from, new_expected_nonce)));
-                            continue;
-                        };
-
-                        if from_token_balance.available_balance < tx.amount {
-                            tx.status = TransactionStatus::Error(ExecError::InsufficientFunds {
-                                from: PublicKeyString::from_bytes(tx.from),
-                                have: from_token_balance.total_balance,
-                                need: tx.amount,
-                            });
-
-                            account_nonces.push(Some((tx.from, new_expected_nonce)));
-                            continue;
-                        }
-                        from_token_balance.available_balance -= tx.amount;
-                        from_token_balance.total_balance -= tx.amount;
-                        new_expected_nonce
-                    };
-
-                    // Create account info if not created
-                    {
-                        self.get_account_info_mut(&tx.to);
-                    }
-                    let to_account_balances = self.get_account_spot_balances_mut(&tx.to);
-                    let to_token_balance_opt = to_account_balances
-                        .asset_balances
-                        .iter_mut()
-                        .find(|a| a.asset_id == tx.asset_id);
-
-                    match to_token_balance_opt {
-                        Some(account_balance) => {
-                            account_balance.total_balance += tx.amount;
-                            account_balance.available_balance += tx.amount;
-                        }
-
-                        None => to_account_balances
-                            .asset_balances
-                            .push(AccountTokenBalance {
-                                asset_id: tx.asset_id,
-                                available_balance: tx.amount,
-                                total_balance: tx.amount,
-                            }),
-                    }
-
-                    tx.status = TransactionStatus::Executed;
-
-                    account_nonces.push(Some((tx.from, new_expected_nonce)));
+                UnsignedTransaction::Transfer(transfer_transaction) => {
+                    account_nonces.push(self.handle_transfer_transaction(transfer_transaction))
                 }
                 UnsignedTransaction::Order(order_transaction) => {
                     account_nonces.push(self.handle_order_transaction(order_transaction))
