@@ -142,6 +142,15 @@ Future improvements:
 - **Cargo** (bundled with Rust)  
   Ensure you can run `cargo --version`.
 
+### Setup Keys with `.env`
+
+To provide each node with its identity:
+1. Rename the provided `.env-example` file to `.env`
+2. This file contains **randomly generated private keys** for each node
+
+
+
+
 ### Installation
 
 1. **Clone the Repository**  
@@ -202,7 +211,7 @@ Note: Transactions may take a moment to finalize after submission, as they must 
 
 
 1. Create a user account with the `create` command.
-![Create account](./assets/create_account.PNG)
+![Create account](./assets/create.PNG)
 2. Drip `USD` or `SUPE` to your account using `drip SUPE` or `drip USD`.
 ![Drip funds into account](./assets/drip.PNG)
 3. Query your account balance using the `query` command.
@@ -226,13 +235,6 @@ Note: Transactions may take a moment to finalize after submission, as they must 
 
 
 
-### Setup Keys with `.env`
-
-To provide each node with its identity:
-1. Rename the provided `.env-example` file to `.env`
-2. This file contains **randomly generated private keys** for each node
-
-Ensure each running instance has the appropriate `.env` file available in its working directory.
 
 ### Observing Logs
 
