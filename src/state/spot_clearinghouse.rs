@@ -16,7 +16,7 @@ use super::{
 pub type MarketId = usize;
 type MarketIdCounter = MarketId;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MarketPrecision {
     pub base_lot_size: u32,  // base units per base lot
     pub quote_lot_size: u32, // quote units per quote lot
@@ -273,7 +273,7 @@ impl SpotClearingHouse {
         return (market, account_balance);
     }
 
-    pub fn cancel_order(&mut self, cancel_order: &LimitOrder, precision: &MarketPrecision) -> bool {
+    pub fn cancel_order(&mut self, cancel_order: &LimitOrder, precision: MarketPrecision) -> bool {
         let market_id = cancel_order.common.market_id;
 
         let (market, account_balance) =
@@ -291,7 +291,7 @@ impl SpotClearingHouse {
                 let quote_token_balance =
                     Self::get_account_token_balance_mut(account_balance, market.quote_asset);
 
-                let quote_lots = base_to_quote_lots(unfilled_base, price, precision);
+                let quote_lots = base_to_quote_lots(unfilled_base, price, &precision);
                 let quote_amount = quote_lots as u128 * precision.quote_lot_size as u128;
                 quote_token_balance.available_balance += quote_amount;
                 true
@@ -1025,10 +1025,10 @@ mod tests {
         spot_clearinghouse.handle_order(Order::Limit(sell_4), &precision);
 
         spot_clearinghouse.handle_order(Order::Limit(buy_5.clone()), &precision);
-        spot_clearinghouse.cancel_order(&buy_5, &precision);
+        spot_clearinghouse.cancel_order(&buy_5, precision.clone());
 
         spot_clearinghouse.handle_order(Order::Limit(sell_6.clone()), &precision);
-        spot_clearinghouse.cancel_order(&sell_6, &precision);
+        spot_clearinghouse.cancel_order(&sell_6, precision.clone());
 
         let market = spot_clearinghouse.markets.get(0).unwrap();
 

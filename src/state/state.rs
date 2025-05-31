@@ -118,6 +118,7 @@ impl LedgerState {
         let mut spot_clearinghouse = SpotClearingHouse::new();
         spot_clearinghouse.add_faucet_account();
 
+        // Add SUPE/USD market
         spot_clearinghouse.add_market(
             0,
             1,
@@ -136,7 +137,7 @@ impl LedgerState {
         }
     }
 
-    pub fn get_asset_info(&self) -> Vec<Asset> {
+    pub fn snapshot_assets(&self) -> Vec<Asset> {
         self.asset_manager.assets.clone()
     }
 
@@ -287,7 +288,6 @@ impl LedgerState {
         from_token_balance.available_balance -= asset_out.amount;
 
         let to_account_balances = self.get_account_spot_balances_mut(&asset_in.account);
-
         let to_token_balance_opt = to_account_balances
             .asset_balances
             .iter_mut()
@@ -308,6 +308,36 @@ impl LedgerState {
                 }),
         }
         expected_nonce
+    }
+
+    pub(crate) fn handle_transfer_transaction(
+        &mut self,
+        transaction: &mut TransferTransaction,
+    ) -> Option<(PublicKeyHash, Nonce)> {
+        let from_account_info = self.get_account_info_mut(&transaction.from);
+
+        if transaction.nonce < from_account_info.expected_nonce {
+            transaction.status = TransactionStatus::Rejected("Duplicate Nonce".to_string());
+            return None;
+        }
+
+        if transaction.nonce > from_account_info.expected_nonce {
+            transaction.status = TransactionStatus::Rejected("Out of order nonce".to_string());
+            return None;
+        }
+
+        let res = self.prepare_transfer_transaction(transaction);
+        match res {
+            Ok(delta) => {
+                let expected_nonce = self.commit_transfer_transaction(delta);
+                transaction.status = TransactionStatus::Executed;
+                Some((transaction.from, expected_nonce))
+            }
+            Err(err) => {
+                transaction.status = TransactionStatus::Error(err);
+                None
+            }
+        }
     }
 
     pub(crate) fn handle_order_transaction(
@@ -532,6 +562,26 @@ impl LedgerState {
         return Some((user_account, account.expected_nonce));
     }
 
+    pub(crate) fn commit_cancel_order_transaction(
+        &mut self,
+        order: &LimitOrder,
+        precision: MarketPrecision,
+        user_account: PublicKeyHash,
+        order_position: usize,
+    ) -> Nonce {
+        if self.spot_clearinghouse.cancel_order(order, precision) {
+            let account = self.get_account_info_mut(&user_account);
+
+            debug_assert!(order_position < account.open_orders.len());
+            account.open_orders.remove(order_position);
+            account.completed_orders.push(Order::Limit(order.clone()));
+        };
+
+        let account = self.get_account_info_mut(&user_account);
+        account.expected_nonce += 1;
+        account.expected_nonce
+    }
+
     pub(crate) fn handle_cancel_order_transaction(
         &mut self,
         transaction: &mut CancelOrderTransaction,
@@ -556,8 +606,10 @@ impl LedgerState {
         let order = from_account_info.get_open_order(transaction.order_id);
 
         let Some(order) = order else {
-            transaction.status =
-                TransactionStatus::Error(ExecError::ResourceNotFound(Resource::Market(market_id)));
+            transaction.status = TransactionStatus::Rejected(format!(
+                "Order id: {} not found in open order",
+                transaction.order_id
+            ));
             return None;
         };
 
@@ -587,51 +639,17 @@ impl LedgerState {
             tick_decimals,
         };
 
-        if self.spot_clearinghouse.cancel_order(order, &precision) {
-            let account = self.get_account_info_mut(&user_account);
-            let pos = account
-                .open_orders
-                .iter()
-                .position(|o| o.common.id == order.common.id)?;
-            account.open_orders.remove(pos);
-            account.completed_orders.push(Order::Limit(order.clone()));
-        };
-
         let account = self.get_account_info_mut(&user_account);
-        account.expected_nonce += 1;
+        let order_position = account
+            .open_orders
+            .iter()
+            .position(|o| o.common.id == order.common.id)?;
+
+        let expected_nonce =
+            self.commit_cancel_order_transaction(order, precision, user_account, order_position);
         transaction.status = TransactionStatus::Executed;
 
-        return Some((user_account, account.expected_nonce));
-    }
-
-    pub(crate) fn handle_transfer_transaction(
-        &mut self,
-        transaction: &mut TransferTransaction,
-    ) -> Option<(PublicKeyHash, Nonce)> {
-        let from_account_info = self.get_account_info_mut(&transaction.from);
-
-        if transaction.nonce < from_account_info.expected_nonce {
-            transaction.status = TransactionStatus::Rejected("Duplicate Nonce".to_string());
-            return None;
-        }
-
-        if transaction.nonce > from_account_info.expected_nonce {
-            transaction.status = TransactionStatus::Rejected("Out of order nonce".to_string());
-            return None;
-        }
-
-        let res = self.prepare_transfer_transaction(transaction);
-        match res {
-            Ok(delta) => {
-                let expected_nonce = self.commit_transfer_transaction(delta);
-                transaction.status = TransactionStatus::Executed;
-                Some((transaction.from, expected_nonce))
-            }
-            Err(err) => {
-                transaction.status = TransactionStatus::Error(err);
-                None
-            }
-        }
+        return Some((user_account, expected_nonce));
     }
 
     pub(crate) fn apply(
@@ -669,7 +687,7 @@ impl LedgerState {
                 ClientResponse::AccountQueryReponse(account_info_with_balances)
             }
             crate::node::client::handler::ClientQuery::AssetQuery => {
-                let asset_info = self.get_asset_info();
+                let asset_info = self.snapshot_assets();
                 ClientResponse::AssetQueryResponse(asset_info)
             }
             crate::node::client::handler::ClientQuery::MarketInfoQuery(market_id) => {
