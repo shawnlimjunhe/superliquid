@@ -10,7 +10,9 @@ use super::{
         ExecutionResults, LimitFillResult, LimitOrder, MarketOrder, MarketOrderMatchingResults,
         Order, OrderChange, OrderStatus, ResidualOrder, UserExecutionResult,
     },
-    spot_market::{MarketInfo, SpotMarket},
+    spot_market::{CancelOrderIndexes, MarketInfo, SpotMarket},
+    state::{ExecError, Resource},
+    transaction_delta::SpotCancelOrderDelta,
 };
 
 pub type MarketId = usize;
@@ -167,6 +169,10 @@ impl SpotClearingHouse {
             .collect()
     }
 
+    pub fn get_market(&self, id: MarketId) -> Option<&SpotMarket> {
+        self.markets.get(id)
+    }
+
     pub fn get_quote_base_tick_from_id(
         &self,
         market_id: MarketId,
@@ -273,36 +279,56 @@ impl SpotClearingHouse {
         return (market, account_balance);
     }
 
-    pub fn cancel_order(&mut self, cancel_order: &LimitOrder, precision: MarketPrecision) -> bool {
-        let market_id = cancel_order.common.market_id;
-
-        let (market, account_balance) =
-            self.get_market_and_account_balance(market_id, &cancel_order.common.account);
-        let Some(market) = market else {
-            println!("Can't find market with id");
-            return false;
+    pub fn find_cancel_order(&self, order: &LimitOrder) -> Result<CancelOrderIndexes, ExecError> {
+        let market_id = order.common.market_id;
+        let market = match self.get_market(market_id) {
+            Some(market) => market,
+            None => return Err(ExecError::ResourceNotFound(Resource::Market(market_id))),
         };
 
-        let unfilled_base = market.cancel_order(&cancel_order);
-        let price = cancel_order.price_multiple;
+        market.find_cancel_order(order)
+    }
 
-        match cancel_order.common.direction {
+    pub fn commit_cancel_order(
+        &mut self,
+        order: &LimitOrder,
+        precision: MarketPrecision,
+        delta: SpotCancelOrderDelta,
+    ) {
+        let market_id = order.common.market_id;
+        let SpotCancelOrderDelta {
+            initiator,
+            order_level_index,
+            order_index,
+            ..
+        } = delta;
+
+        let market = &mut self.markets[market_id];
+        let quote_asset = market.quote_asset;
+        let base_asset = market.base_asset;
+
+        let unfilled_base_lots =
+            market.commit_cancel_order_to_orderbook(order_level_index, order_index, order);
+
+        let account_balance = &mut self.get_account_balance_mut(&initiator);
+
+        let price = order.price_multiple;
+
+        match order.common.direction {
             OrderDirection::Buy => {
                 let quote_token_balance =
-                    Self::get_account_token_balance_mut(account_balance, market.quote_asset);
+                    Self::get_account_token_balance_mut(account_balance, quote_asset);
 
-                let quote_lots = base_to_quote_lots(unfilled_base, price, &precision);
+                let quote_lots = base_to_quote_lots(unfilled_base_lots, price, &precision);
                 let quote_amount = quote_lots as u128 * precision.quote_lot_size as u128;
                 quote_token_balance.available_balance += quote_amount;
-                true
             }
             OrderDirection::Sell => {
                 let base_token_balance =
-                    Self::get_account_token_balance_mut(account_balance, market.base_asset);
+                    Self::get_account_token_balance_mut(account_balance, base_asset);
 
-                let base_amount = unfilled_base as u128 * precision.base_lot_size as u128;
+                let base_amount = unfilled_base_lots as u128 * precision.base_lot_size as u128;
                 base_token_balance.available_balance += base_amount;
-                true
             }
         }
     }
@@ -862,10 +888,14 @@ impl SpotClearingHouse {
 
 #[cfg(test)]
 mod tests {
+
     use crate::{
-        state::order::{
-            CommonOrderFields, LimitOrder, MarketBuyOrder, MarketOrder, MarketSellOrder, Order,
-            OrderDirection, OrderId, OrderStatus,
+        state::{
+            order::{
+                CommonOrderFields, LimitOrder, MarketBuyOrder, MarketOrder, MarketSellOrder, Order,
+                OrderDirection, OrderId, OrderStatus,
+            },
+            transaction_delta::SpotCancelOrderDelta,
         },
         types::transaction::PublicKeyHash,
     };
@@ -892,6 +922,21 @@ mod tests {
                 direction,
             },
         }
+    }
+
+    fn cancel_order(
+        clearing_house: &mut SpotClearingHouse,
+        order: &LimitOrder,
+        precision: MarketPrecision,
+    ) {
+        let indexes = clearing_house.find_cancel_order(order).unwrap();
+        let delta = SpotCancelOrderDelta {
+            initiator: order.common.account,
+            account_order_position: 0, // not needed
+            order_level_index: indexes.0,
+            order_index: indexes.1,
+        };
+        clearing_house.commit_cancel_order(order, precision, delta);
     }
 
     fn new_market_buy(id: OrderId, quote_size: u64, account: PublicKeyHash) -> MarketOrder {
@@ -1025,10 +1070,10 @@ mod tests {
         spot_clearinghouse.handle_order(Order::Limit(sell_4), &precision);
 
         spot_clearinghouse.handle_order(Order::Limit(buy_5.clone()), &precision);
-        spot_clearinghouse.cancel_order(&buy_5, precision.clone());
+        cancel_order(&mut spot_clearinghouse, &buy_5, precision.clone());
 
         spot_clearinghouse.handle_order(Order::Limit(sell_6.clone()), &precision);
-        spot_clearinghouse.cancel_order(&sell_6, precision.clone());
+        cancel_order(&mut spot_clearinghouse, &sell_6, precision.clone());
 
         let market = spot_clearinghouse.markets.get(0).unwrap();
 

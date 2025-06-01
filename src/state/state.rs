@@ -21,7 +21,7 @@ use super::{
         AccountBalance, AccountTokenBalance, MarketId, MarketPrecision, SpotClearingHouse,
     },
     spot_market::MarketInfo,
-    transaction_delta::{AssetDelta, TransferDelta},
+    transaction_delta::{AssetDelta, SpotCancelOrderDelta, TransferDelta},
 };
 
 pub type Balance = u128;
@@ -85,6 +85,7 @@ impl AccountInfo {
 pub enum Resource {
     Market(MarketId),
     Asset(AssetId),
+    Order(OrderId),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -95,6 +96,7 @@ pub enum ExecError {
         need: u128,
     },
     ResourceNotFound(Resource),
+    OrderAlreadyCancelled,
 }
 
 pub struct LedgerState {
@@ -265,7 +267,7 @@ impl LedgerState {
         Ok(TransferDelta {
             asset_in,
             asset_out,
-            nonce_delta: transaction.from,
+            initiator: transaction.from,
         })
     }
 
@@ -273,10 +275,10 @@ impl LedgerState {
         let TransferDelta {
             asset_in,
             asset_out,
-            nonce_delta,
+            initiator,
         } = delta;
 
-        let from_account_info = self.get_account_info_mut(&nonce_delta);
+        let from_account_info = self.get_account_info_mut(&initiator);
         from_account_info.expected_nonce += 1;
         let expected_nonce = from_account_info.expected_nonce;
 
@@ -566,18 +568,24 @@ impl LedgerState {
         &mut self,
         order: &LimitOrder,
         precision: MarketPrecision,
-        user_account: PublicKeyHash,
-        order_position: usize,
+        delta: SpotCancelOrderDelta,
     ) -> Nonce {
-        if self.spot_clearinghouse.cancel_order(order, precision) {
-            let account = self.get_account_info_mut(&user_account);
+        let SpotCancelOrderDelta {
+            initiator,
+            account_order_position,
+            ..
+        } = delta;
 
-            debug_assert!(order_position < account.open_orders.len());
-            account.open_orders.remove(order_position);
-            account.completed_orders.push(Order::Limit(order.clone()));
-        };
+        self.spot_clearinghouse
+            .commit_cancel_order(order, precision, delta);
 
-        let account = self.get_account_info_mut(&user_account);
+        let account = self.get_account_info_mut(&initiator);
+
+        debug_assert!(account_order_position < account.open_orders.len());
+        let removed_order = account.open_orders.remove(account_order_position);
+        account.completed_orders.push(Order::Limit(removed_order));
+
+        let account = self.get_account_info_mut(&initiator);
         account.expected_nonce += 1;
         account.expected_nonce
     }
@@ -590,9 +598,7 @@ impl LedgerState {
         let user_account = transaction.from;
         let nonce = transaction.nonce;
 
-        // check nonce
         let from_account_info = self.get_account_info_or_default(&transaction.from);
-        // todo should change the clone
         if nonce < from_account_info.expected_nonce {
             transaction.status = TransactionStatus::Rejected("Duplicate nonce".to_string());
             return None;
@@ -640,16 +646,32 @@ impl LedgerState {
         };
 
         let account = self.get_account_info_mut(&user_account);
-        let order_position = account
+        let account_order_position = account
             .open_orders
             .iter()
             .position(|o| o.common.id == order.common.id)?;
 
-        let expected_nonce =
-            self.commit_cancel_order_transaction(order, precision, user_account, order_position);
-        transaction.status = TransactionStatus::Executed;
+        match self.spot_clearinghouse.find_cancel_order(order) {
+            Ok(cancel_order_indexes) => {
+                // Commit
+                let order_level_index = cancel_order_indexes.0;
+                let order_index = cancel_order_indexes.1;
+                let delta = SpotCancelOrderDelta {
+                    initiator: order.common.account,
+                    account_order_position,
+                    order_level_index,
+                    order_index,
+                };
+                let expected_nonce = self.commit_cancel_order_transaction(order, precision, delta);
+                transaction.status = TransactionStatus::Executed;
 
-        return Some((user_account, expected_nonce));
+                Some((user_account, expected_nonce))
+            }
+            Err(exec_error) => {
+                transaction.status = TransactionStatus::Error(exec_error);
+                None
+            }
+        }
     }
 
     pub(crate) fn apply(

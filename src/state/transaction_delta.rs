@@ -10,14 +10,14 @@ pub struct AssetDelta {
 }
 
 pub struct TransferDelta {
-    pub(crate) nonce_delta: PublicKeyHash,
+    pub(crate) initiator: PublicKeyHash,
     pub(crate) asset_in: AssetDelta,
     pub(crate) asset_out: AssetDelta,
 }
 
 pub struct SpotCancelOrderDelta {
-    pub(crate) nonce_delta: PublicKeyHash,
+    pub(crate) initiator: PublicKeyHash,
     pub(crate) account_order_position: usize,
-    pub(crate) order_unfilled_size: u64,
-    pub(crate) order_level: usize,
+    pub(crate) order_level_index: usize,
+    pub(crate) order_index: usize,
 }

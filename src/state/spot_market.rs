@@ -8,6 +8,7 @@ use super::{
         UserExecutionResult,
     },
     spot_clearinghouse::{MarketId, MarketPrecision, base_to_quote_lots, quote_lots_to_base_lots},
+    state::{ExecError, Resource},
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -38,6 +39,15 @@ pub struct Level {
     pub orders: Vec<LimitOrder>,
     pub cancelled: u32,
 }
+
+enum LevelIndex {
+    NotFound,
+    AlreadyCancelled,
+    Index(usize),
+}
+
+pub(crate) type CancelOrderIndexes = (usize, usize);
+
 pub struct SpotMarket {
     pub market_id: MarketId,
     pub asset_one: AssetId,
@@ -119,7 +129,9 @@ impl SpotMarket {
         )
     }
 
-    fn mark_order_as_cancelled(orders: &mut Vec<LimitOrder>, order: &LimitOrder) -> bool {
+    /// Finds the index of the order to cancel within a Level's order
+    /// Uses Binary search as orders are ordered by order_id
+    fn find_order_index(orders: &Vec<LimitOrder>, order: &LimitOrder) -> LevelIndex {
         let order_id = order.common.id;
         let mut left = 0;
         let mut right = orders.len();
@@ -129,24 +141,30 @@ impl SpotMarket {
 
             if order_id == mid_id {
                 if orders[mid].common.status == OrderStatus::Cancelled {
-                    return false;
+                    return LevelIndex::AlreadyCancelled;
                 }
-                orders[mid].common.status = OrderStatus::Cancelled;
-                return true;
+                return LevelIndex::Index(mid);
             } else if order_id < mid_id {
                 right = mid;
             } else {
                 left = mid + 1;
             }
         }
-        return false;
+        return LevelIndex::NotFound;
     }
 
-    fn cancel_order_with_cmp<F>(levels: &mut Vec<Level>, order: &LimitOrder, mut compare: F) -> u64
+    /// Finds the index of the level and the index of the order within the level
+    /// Uses binary search as orders are ordered by price
+    fn find_order_to_cancel_with_cmp<F>(
+        levels: &Vec<Level>,
+        order: &LimitOrder,
+        mut compare: F,
+    ) -> Result<CancelOrderIndexes, ExecError>
     where
         F: FnMut(OrderPriceMultiple, OrderPriceMultiple) -> std::cmp::Ordering,
     {
         let price = order.price_multiple;
+        let order_id = order.common.id;
         let mut left = 0;
         let mut right = levels.len();
 
@@ -155,26 +173,15 @@ impl SpotMarket {
             let mid_price = levels[mid].price;
 
             if price == mid_price {
-                let level = &mut levels[mid];
-                if !Self::mark_order_as_cancelled(&mut level.orders, order) {
-                    return 0;
+                let level = &levels[mid];
+                let level_index = Self::find_order_index(&level.orders, order);
+                match level_index {
+                    LevelIndex::AlreadyCancelled => return Err(ExecError::OrderAlreadyCancelled),
+                    LevelIndex::NotFound => {
+                        return Err(ExecError::ResourceNotFound(Resource::Order(order_id)));
+                    }
+                    LevelIndex::Index(index) => return Ok((mid, index)),
                 }
-
-                level.cancelled += 1;
-                let unfilled_size = order.base_lots - order.filled_base_lots;
-                level.volume -= unfilled_size;
-
-                if level.volume == 0 {
-                    levels.remove(mid);
-                } else if level.cancelled > (level.orders.len() / 2) as u32 {
-                    // prune when vector is sparse enough
-                    level
-                        .orders
-                        .retain(|order| order.common.status != OrderStatus::Cancelled);
-                    level.cancelled = 0;
-                }
-
-                return unfilled_size;
             } else {
                 if compare(price, mid_price) == std::cmp::Ordering::Less {
                     right = mid;
@@ -183,7 +190,58 @@ impl SpotMarket {
                 }
             }
         }
-        return 0;
+        return Err(ExecError::ResourceNotFound(Resource::Order(order_id)));
+    }
+
+    pub fn find_cancel_bid(&self, order: &LimitOrder) -> Result<CancelOrderIndexes, ExecError> {
+        Self::find_order_to_cancel_with_cmp(&self.bids_levels, order, |a, b| {
+            a.partial_cmp(&b).unwrap()
+        })
+    }
+
+    pub fn find_cancel_ask(&self, order: &LimitOrder) -> Result<CancelOrderIndexes, ExecError> {
+        Self::find_order_to_cancel_with_cmp(&self.asks_levels, order, |a, b| {
+            b.partial_cmp(&a).unwrap()
+        })
+    }
+
+    pub fn find_cancel_order(&self, order: &LimitOrder) -> Result<CancelOrderIndexes, ExecError> {
+        match order.common.direction {
+            OrderDirection::Buy => self.find_cancel_bid(order),
+            OrderDirection::Sell => self.find_cancel_ask(order),
+        }
+    }
+
+    pub fn commit_cancel_order_to_orderbook(
+        &mut self,
+        level_index: usize,
+        order_index: usize,
+        order: &LimitOrder,
+    ) -> u64 {
+        let levels = match order.common.direction {
+            OrderDirection::Buy => &mut self.bids_levels,
+            OrderDirection::Sell => &mut self.asks_levels,
+        };
+
+        let level = &mut levels[level_index];
+        let order: &mut LimitOrder = &mut level.orders[order_index];
+
+        order.common.status = OrderStatus::Cancelled;
+        let unfilled_lots = order.base_lots - order.filled_base_lots;
+
+        level.cancelled += 1;
+        level.volume -= unfilled_lots;
+
+        if level.volume == 0 {
+            // TODO: Can optimise by lazying pruning
+            levels.remove(level_index);
+        } else if level.cancelled > (level.orders.len() / 2) as u32 {
+            level
+                .orders
+                .retain(|order| order.common.status != OrderStatus::Cancelled);
+            level.cancelled = 0;
+        }
+        return unfilled_lots;
     }
 
     pub fn add_bid(&mut self, order: LimitOrder) {
@@ -196,18 +254,6 @@ impl SpotMarket {
         Self::add_order_with_cmp(&mut self.asks_levels, order, |a, b| {
             b.partial_cmp(&a).unwrap()
         });
-    }
-
-    pub fn cancel_bid(&mut self, order: &LimitOrder) -> u64 {
-        Self::cancel_order_with_cmp(&mut self.bids_levels, order, |a, b| {
-            a.partial_cmp(&b).unwrap()
-        })
-    }
-
-    pub fn cancel_ask(&mut self, order: &LimitOrder) -> u64 {
-        Self::cancel_order_with_cmp(&mut self.asks_levels, order, |a, b| {
-            b.partial_cmp(&a).unwrap()
-        })
     }
 
     pub fn execute_limit<F>(
@@ -670,13 +716,6 @@ impl SpotMarket {
         }
     }
 
-    pub fn cancel_order(&mut self, order: &LimitOrder) -> u64 {
-        match order.common.direction {
-            OrderDirection::Buy => self.cancel_bid(order),
-            OrderDirection::Sell => self.cancel_ask(order),
-        }
-    }
-
     pub fn get_best_prices(&self) -> (Option<u64>, Option<u64>) {
         let best_bid = self.bids_levels.last().map(|level| level.price);
         let best_ask = self.asks_levels.last().map(|level| level.price);
@@ -783,6 +822,15 @@ mod tests {
         })
     }
 
+    fn test_cancel_order(market: &mut SpotMarket, order: &LimitOrder) {
+        let index = market.find_cancel_order(order).unwrap();
+        market.commit_cancel_order_to_orderbook(index.0, index.1, order);
+    }
+
+    fn test_cancel_order_expect_err(market: &mut SpotMarket, order: &LimitOrder) {
+        market.find_cancel_order(order).expect_err("Should fail");
+    }
+
     fn assert_user_execution_result(
         result: UserExecutionResult,
         lots_in: u64,
@@ -824,9 +872,12 @@ mod tests {
     mod test_limit_orders {
         use crate::{
             state::{
-                order::{OrderDirection, OrderStatus},
+                order::OrderDirection,
                 spot_clearinghouse::MarketPrecision,
-                spot_market::{Level, SpotMarket, tests::new_limit},
+                spot_market::{
+                    SpotMarket,
+                    tests::{new_limit, test_cancel_order},
+                },
             },
             types::transaction::PublicKeyHash,
         };
@@ -882,7 +933,7 @@ mod tests {
             assert_eq!(market.asks_levels[0].volume, 18); // price 1000
         }
 
-        fn setup_test_market(market: &mut SpotMarket, mp: &MarketPrecision) {
+        fn setup_test_market(mut market: &mut SpotMarket, mp: &MarketPrecision) {
             let mm = [1; 32];
             // Sells
             market.add_limit_helper(new_limit(2_500, 1100, OrderDirection::Sell, 1, mm), mp);
@@ -893,7 +944,10 @@ mod tests {
             market.add_limit_helper(new_limit(2_700, 800, OrderDirection::Sell, 5, mm), mp);
             market.add_limit_helper(new_limit(2_800, 400, OrderDirection::Sell, 6, mm), mp);
 
-            market.cancel_order(&new_limit(2_550, 1000, OrderDirection::Sell, 3, mm));
+            test_cancel_order(
+                &mut market,
+                &new_limit(2_550, 1000, OrderDirection::Sell, 3, mm),
+            );
             // total size
 
             // Buys
@@ -905,7 +959,10 @@ mod tests {
             market.add_limit_helper(new_limit(2_300, 800, OrderDirection::Buy, 11, mm), &mp);
             market.add_limit_helper(new_limit(2400, 400, OrderDirection::Buy, 12, mm), &mp);
 
-            market.cancel_order(&new_limit(2_200, 1000, OrderDirection::Buy, 9, mm));
+            test_cancel_order(
+                &mut market,
+                &new_limit(2_200, 1000, OrderDirection::Buy, 9, mm),
+            );
         }
 
         mod test_limit_execution {
@@ -1871,124 +1928,146 @@ mod tests {
             assert_eq!(market.get_best_prices(), (None, None));
         }
 
-        #[test]
-        fn test_cancels_ask_order_correctly() {
-            let mut market = SpotMarket::test_new(100, 2);
-            let mp = MarketPrecision {
-                base_lot_size: 100,
-                quote_lot_size: 100,
-                tick: market.tick,
-                tick_decimals: market.tick_decimals,
+        mod test_cancel {
+            use crate::{
+                state::{
+                    order::{OrderDirection, OrderStatus},
+                    spot_clearinghouse::MarketPrecision,
+                    spot_market::{
+                        Level, SpotMarket,
+                        tests::{new_limit, test_cancel_order, test_cancel_order_expect_err},
+                    },
+                },
+                types::transaction::PublicKeyHash,
             };
 
-            let account = PublicKeyHash::default();
+            #[test]
+            fn test_cancels_ask_order_correctly() {
+                let mut market = SpotMarket::test_new(100, 2);
+                let mp = MarketPrecision {
+                    base_lot_size: 100,
+                    quote_lot_size: 100,
+                    tick: market.tick,
+                    tick_decimals: market.tick_decimals,
+                };
 
-            market.add_limit_helper(new_limit(1000, 8, OrderDirection::Sell, 2, account), &mp);
-            market.add_limit_helper(new_limit(107, 6, OrderDirection::Sell, 3, account), &mp);
-            market.add_limit_helper(new_limit(110, 8, OrderDirection::Sell, 1, account), &mp);
-            market.add_limit_helper(new_limit(109, 4, OrderDirection::Sell, 4, account), &mp);
-            market.add_limit_helper(new_limit(1000, 10, OrderDirection::Sell, 5, account), &mp);
-            market.add_limit_helper(new_limit(1000, 9, OrderDirection::Sell, 6, account), &mp);
-            market.add_limit_helper(new_limit(1000, 19, OrderDirection::Sell, 7, account), &mp);
-            assert_eq!(market.asks_levels.len(), 4);
-            assert_eq!(market.bids_levels.len(), 0);
+                let account = PublicKeyHash::default();
 
-            market.cancel_order(&new_limit(1000, 8, OrderDirection::Sell, 5, account));
-            let price_level = &market.asks_levels[0];
-            println!("{:?}", price_level.orders);
-            assert_eq!(price_level.orders.len(), 4);
-            assert_eq!(price_level.orders[1].common.status, OrderStatus::Cancelled);
-            assert_eq!(price_level.cancelled, 1);
-        }
+                market.add_limit_helper(new_limit(1000, 8, OrderDirection::Sell, 2, account), &mp);
+                market.add_limit_helper(new_limit(107, 6, OrderDirection::Sell, 3, account), &mp);
+                market.add_limit_helper(new_limit(110, 8, OrderDirection::Sell, 1, account), &mp);
+                market.add_limit_helper(new_limit(109, 4, OrderDirection::Sell, 4, account), &mp);
+                market.add_limit_helper(new_limit(1000, 10, OrderDirection::Sell, 5, account), &mp);
+                market.add_limit_helper(new_limit(1000, 9, OrderDirection::Sell, 6, account), &mp);
+                market.add_limit_helper(new_limit(1000, 19, OrderDirection::Sell, 7, account), &mp);
+                assert_eq!(market.asks_levels.len(), 4);
+                assert_eq!(market.bids_levels.len(), 0);
 
-        #[test]
-        fn test_cancels_buy_order_correctly() {
-            let mut market = SpotMarket::test_new(100, 2);
-            let mp = MarketPrecision {
-                base_lot_size: 100,
-                quote_lot_size: 100,
-                tick: market.tick,
-                tick_decimals: market.tick_decimals,
-            };
-            let account = PublicKeyHash::default();
-
-            market.add_limit_helper(new_limit(1, 8, OrderDirection::Buy, 1, account), &mp);
-            market.add_limit_helper(new_limit(3, 8, OrderDirection::Buy, 2, account), &mp);
-            market.add_limit_helper(new_limit(4, 6, OrderDirection::Buy, 3, account), &mp);
-            market.add_limit_helper(new_limit(3, 4, OrderDirection::Buy, 4, account), &mp);
-            market.add_limit_helper(new_limit(8, 10, OrderDirection::Buy, 5, account), &mp);
-            market.add_limit_helper(new_limit(3, 9, OrderDirection::Buy, 6, account), &mp);
-            assert_eq!(market.bids_levels.len(), 4);
-            assert_eq!(market.asks_levels.len(), 0);
-
-            market.cancel_order(&new_limit(3, 9, OrderDirection::Buy, 6, account));
-            let price_level = &market.bids_levels[1];
-            assert_eq!(price_level.orders[2].common.status, OrderStatus::Cancelled);
-            assert_eq!(price_level.cancelled, 1);
-        }
-
-        #[test]
-        fn test_prunes_cancelled_orders_correctly() {
-            fn assert_bid_level(
-                bids_level: &Level,
-                cancelled: u32,
-                orders_len: usize,
-                volume: u64,
-            ) {
-                assert_eq!(bids_level.cancelled, cancelled);
-                assert_eq!(bids_level.orders.len(), orders_len);
-                assert_eq!(bids_level.volume, volume);
+                test_cancel_order(
+                    &mut market,
+                    &new_limit(1000, 8, OrderDirection::Sell, 5, account),
+                );
+                let price_level = &market.asks_levels[0];
+                println!("{:?}", price_level.orders);
+                assert_eq!(price_level.orders.len(), 4);
+                assert_eq!(price_level.orders[1].common.status, OrderStatus::Cancelled);
+                assert_eq!(price_level.cancelled, 1);
             }
-            let mut market = SpotMarket::test_new(100, 2);
-            let mp = MarketPrecision {
-                base_lot_size: 100,
-                quote_lot_size: 100,
-                tick: market.tick,
-                tick_decimals: market.tick_decimals,
-            };
 
-            let account = PublicKeyHash::default();
+            #[test]
+            fn test_cancels_buy_order_correctly() {
+                let mut market = SpotMarket::test_new(100, 2);
+                let mp = MarketPrecision {
+                    base_lot_size: 100,
+                    quote_lot_size: 100,
+                    tick: market.tick,
+                    tick_decimals: market.tick_decimals,
+                };
+                let account = PublicKeyHash::default();
 
-            let order_1 = new_limit(1, 8, OrderDirection::Buy, 1, account);
-            let order_2 = new_limit(3, 8, OrderDirection::Buy, 2, account);
-            let order_3 = new_limit(1, 6, OrderDirection::Buy, 3, account);
-            let order_4 = new_limit(1, 4, OrderDirection::Buy, 4, account);
-            let order_5 = new_limit(1, 10, OrderDirection::Buy, 5, account);
-            let order_6 = new_limit(1, 9, OrderDirection::Buy, 6, account);
+                market.add_limit_helper(new_limit(1, 8, OrderDirection::Buy, 1, account), &mp);
+                market.add_limit_helper(new_limit(3, 8, OrderDirection::Buy, 2, account), &mp);
+                market.add_limit_helper(new_limit(4, 6, OrderDirection::Buy, 3, account), &mp);
+                market.add_limit_helper(new_limit(3, 4, OrderDirection::Buy, 4, account), &mp);
+                market.add_limit_helper(new_limit(8, 10, OrderDirection::Buy, 5, account), &mp);
+                market.add_limit_helper(new_limit(3, 9, OrderDirection::Buy, 6, account), &mp);
+                assert_eq!(market.bids_levels.len(), 4);
+                assert_eq!(market.asks_levels.len(), 0);
 
-            market.add_limit_helper(order_1.clone(), &mp);
-            market.add_limit_helper(order_2.clone(), &mp);
-            market.add_limit_helper(order_3.clone(), &mp);
-            market.add_limit_helper(order_4.clone(), &mp);
-            market.add_limit_helper(order_5.clone(), &mp);
-            market.add_limit_helper(order_6.clone(), &mp);
+                let order = new_limit(3, 9, OrderDirection::Buy, 6, account);
+                test_cancel_order(&mut market, &order);
 
-            assert_eq!(market.bids_levels.len(), 2);
-            assert_eq!(market.asks_levels.len(), 0);
+                let price_level = &market.bids_levels[1];
+                assert_eq!(price_level.orders[2].common.status, OrderStatus::Cancelled);
+                assert_eq!(price_level.cancelled, 1);
+            }
 
-            let mut expected_level_volume = 37;
-            assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+            #[test]
+            fn test_prunes_cancelled_orders_correctly() {
+                fn assert_bid_level(
+                    bids_level: &Level,
+                    cancelled: u32,
+                    orders_len: usize,
+                    volume: u64,
+                ) {
+                    assert_eq!(bids_level.cancelled, cancelled);
+                    assert_eq!(bids_level.orders.len(), orders_len);
+                    assert_eq!(bids_level.volume, volume);
+                }
+                let mut market = SpotMarket::test_new(100, 2);
+                let mp = MarketPrecision {
+                    base_lot_size: 100,
+                    quote_lot_size: 100,
+                    tick: market.tick,
+                    tick_decimals: market.tick_decimals,
+                };
 
-            market.cancel_order(&order_1);
-            expected_level_volume -= order_1.base_lots;
-            let bids_levels = &market.bids_levels;
-            assert_bid_level(&bids_levels[0], 1, 5, expected_level_volume);
+                let account = PublicKeyHash::default();
 
-            // try cancel again
-            market.cancel_order(&order_1);
-            let bids_levels = &market.bids_levels;
-            assert_bid_level(&bids_levels[0], 1, 5, expected_level_volume);
+                let order_1 = new_limit(1, 8, OrderDirection::Buy, 1, account);
+                let order_2 = new_limit(3, 8, OrderDirection::Buy, 2, account);
+                let order_3 = new_limit(1, 6, OrderDirection::Buy, 3, account);
+                let order_4 = new_limit(1, 4, OrderDirection::Buy, 4, account);
+                let order_5 = new_limit(1, 10, OrderDirection::Buy, 5, account);
+                let order_6 = new_limit(1, 9, OrderDirection::Buy, 6, account);
 
-            market.cancel_order(&order_5);
-            expected_level_volume -= order_5.base_lots;
-            let bids_levels = &market.bids_levels;
-            assert_bid_level(&bids_levels[0], 2, 5, expected_level_volume);
+                market.add_limit_helper(order_1.clone(), &mp);
+                market.add_limit_helper(order_2.clone(), &mp);
+                market.add_limit_helper(order_3.clone(), &mp);
+                market.add_limit_helper(order_4.clone(), &mp);
+                market.add_limit_helper(order_5.clone(), &mp);
+                market.add_limit_helper(order_6.clone(), &mp);
 
-            // should prune here
-            market.cancel_order(&new_limit(1, 9, OrderDirection::Buy, 6, account));
-            expected_level_volume -= order_6.base_lots;
-            let bids_levels = &market.bids_levels;
-            assert_bid_level(&bids_levels[0], 0, 2, expected_level_volume);
+                assert_eq!(market.bids_levels.len(), 2);
+                assert_eq!(market.asks_levels.len(), 0);
+
+                let mut expected_level_volume = 37;
+                assert_eq!(market.bids_levels[0].volume, expected_level_volume);
+
+                test_cancel_order(&mut market, &order_1);
+                expected_level_volume -= order_1.base_lots;
+                let bids_levels = &market.bids_levels;
+                assert_bid_level(&bids_levels[0], 1, 5, expected_level_volume);
+
+                // try cancel again
+                test_cancel_order_expect_err(&mut market, &order_1);
+                let bids_levels = &market.bids_levels;
+                assert_bid_level(&bids_levels[0], 1, 5, expected_level_volume);
+
+                test_cancel_order(&mut market, &order_5);
+                expected_level_volume -= order_5.base_lots;
+                let bids_levels = &market.bids_levels;
+                assert_bid_level(&bids_levels[0], 2, 5, expected_level_volume);
+
+                // should prune here
+                test_cancel_order(
+                    &mut market,
+                    &new_limit(1, 9, OrderDirection::Buy, 6, account),
+                );
+                expected_level_volume -= order_6.base_lots;
+                let bids_levels = &market.bids_levels;
+                assert_bid_level(&bids_levels[0], 0, 2, expected_level_volume);
+            }
         }
 
         #[test]
